@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+  <meta name="theme-color" content="#0F0F0F" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>Попутчик</title>
+  <link rel="manifest" href="/manifest.json" />
+  <!-- MarkerCluster CDN -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.css" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/MarkerCluster.Default.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.markercluster/1.5.3/leaflet.markercluster.js"></script>
+  <style>
+    .leaflet-tooltip-dark {
+      background: rgba(15,15,15,0.9) !important;
+      border: 1px solid #2E2E2E !important;
+      color: #F0F0F0 !important;
+      font-size: 12px !important;
+      border-radius: 6px !important;
+      padding: 3px 8px !important;
+    }
+    .leaflet-tooltip-dark::before { border-top-color: rgba(15,15,15,0.9) !important; }
+    .leaflet-container a { outline: none; }
+    .leaflet-control-zoom a {
+      background: rgba(26,26,26,0.92) !important;
+      border-color: #2E2E2E !important;
+      color: #F0F0F0 !important;
+    }
+    .marker-cluster-small, .marker-cluster-medium, .marker-cluster-large {
+      background-color: rgba(249,115,22,0.3) !important;
+    }
+    .marker-cluster-small div, .marker-cluster-medium div, .marker-cluster-large div {
+      background-color: rgba(249,115,22,0.85) !important;
+      color: white !important; font-weight: 700 !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="module" src="/src/main.tsx"></script>
+</body>
+</html>
