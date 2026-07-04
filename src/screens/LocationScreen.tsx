@@ -1,0 +1,216 @@
+import { useEffect, useCallback, useState, useRef } from 'react'
+import type { CSSProperties } from 'react'
+import L from 'leaflet'
+import { LeafletMap, RecenterButton, MAP_MIN_ZOOM, MAP_MAX_ZOOM } from '../components/map/LeafletMap'
+import { AddEventSheet } from '../components/map/AddEventSheet'
+import { EventDetailSheet } from '../components/map/EventDetailSheet'
+import { EventAheadAlert } from '../components/map/EventAheadAlert'
+import { MapHUD, AddEventFAB, ZoomControls } from '../components/map/MapHUD'
+import { Speedometer } from '../components/map/Speedometer'
+import { MapSearch } from '../components/map/MapSearch'
+import { NavigationPanel } from '../components/map/NavigationPanel'
+import { RouteSelector } from '../components/map/RouteSelector'
+import { COLORS, TAB_HEIGHT } from '../components/ui/tokens'
+import { useGPS } from '../hooks/useGPS'
+import { useMapEvents } from '../hooks/useMapEvents'
+import { usePresence } from '../hooks/usePresence'
+import { useEventsAhead } from '../hooks/useEventsAhead'
+import { useSpeedLimit } from '../hooks/useSpeedLimit'
+import { useRoute } from '../hooks/useRoute'
+import type { RoadEvent, EventType } from '../types/event'
+import type { Coords } from '../types/geo'
+
+const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
+
+export function LocationScreen() {
+  const gps = useGPS()
+  const mapRef = useRef<L.Map | null>(null)
+
+  useEffect(() => {
+    gps.start()
+    return () => gps.stop()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const mapCenterRef = useRef<Coords>(DEFAULT_CENTER)
+  const [zoom, setZoom] = useState(14)
+
+  const { events, createEvent, voteOnEvent, creating } = useMapEvents(null)
+  const { onlineUsers } = usePresence(gps.position)
+  const { alerts, dismiss } = useEventsAhead(gps.position, events)
+  const speedLimit = useSpeedLimit(gps.position)
+  const {
+    routes, activeRoute, loading: routeLoading, selecting,
+    buildRoute, selectRoute, clearRoute, checkDeviation,
+  } = useRoute()
+
+  const [autoCenter, setAutoCenter] = useState(true)
+  const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
+  const [selectedEvent, setSelectedEvent] = useState<RoadEvent | null>(null)
+  const [addSheetOpen, setAddSheetOpen] = useState(false)
+  const [destination, setDestination] = useState<Coords | null>(null)
+
+  // Автоперестройка маршрута при отклонении
+  useEffect(() => {
+    if (!gps.position || !activeRoute) return
+    void checkDeviation(gps.position.lat, gps.position.lng)
+  }, [gps.position?.lat, gps.position?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const handleMapClick = useCallback((lat: number, lng: number) => {
+    if (selectedEvent) return
+    setPendingCoords({ lat, lng })
+    setAddSheetOpen(true)
+    setAutoCenter(false)
+  }, [selectedEvent])
+
+  const handleMapMove = useCallback((_center: Coords) => {
+    mapCenterRef.current = _center
+    setAutoCenter(false)
+  }, [])
+
+  const handleEventClick = useCallback((ev: RoadEvent) => {
+    setSelectedEvent(ev); setAddSheetOpen(false)
+  }, [])
+
+  const handleCreateEvent = useCallback(async (type: EventType, coords: Coords, description?: string) => {
+    const payload = description !== undefined
+      ? { type, lat: coords.lat, lng: coords.lng, description }
+      : { type, lat: coords.lat, lng: coords.lng }
+    await createEvent(payload)
+    setAddSheetOpen(false); setPendingCoords(null)
+  }, [createEvent])
+
+  const handleVote = useCallback(async (eventId: string, vote: 'yes' | 'no') => {
+    await voteOnEvent(eventId, vote)
+    setSelectedEvent((prev) => {
+      if (!prev || prev.id !== eventId) return prev
+      return {
+        ...prev,
+        positiveVotes: vote === 'yes' ? prev.positiveVotes + 1 : prev.positiveVotes,
+        negativeVotes: vote === 'no'  ? prev.negativeVotes + 1 : prev.negativeVotes,
+      }
+    })
+  }, [voteOnEvent])
+
+  const handleFABPress = useCallback(() => {
+    const center = gps.position
+      ? { lat: gps.position.lat, lng: gps.position.lng }
+      : mapCenterRef.current
+    setPendingCoords(center); setAddSheetOpen(true)
+  }, [gps.position])
+
+  const handleRecenter = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    if (gps.position) {
+      map.setView([gps.position.lat, gps.position.lng], MAP_MAX_ZOOM, { animate: true, duration: 0.6 })
+    }
+    setAutoCenter(true)
+  }, [gps.position])
+
+  const handleZoomIn = useCallback(() => mapRef.current?.zoomIn(), [])
+  const handleZoomOut = useCallback(() => mapRef.current?.zoomOut(), [])
+
+  const handleSearchSelect = useCallback(async (coords: Coords) => {
+    setDestination(coords)
+    const from = gps.position
+      ? { lat: gps.position.lat, lng: gps.position.lng }
+      : mapCenterRef.current
+    await buildRoute(from, coords)
+    setAutoCenter(false)
+  }, [gps.position, buildRoute])
+
+  const handleClearRoute = useCallback(() => {
+    clearRoute(); setDestination(null)
+  }, [clearRoute])
+
+  const speedKmh = gps.position ? gps.position.speed * 3.6 : 0
+  const alertVisible = alerts.length > 0 && !addSheetOpen && !selectedEvent && !selecting
+  const navActive = !!activeRoute && !alertVisible && !selecting
+
+  const wrapStyle: CSSProperties = {
+    position: 'fixed', top: 0, left: 0, right: 0,
+    bottom: TAB_HEIGHT, backgroundColor: COLORS.bg, overflow: 'hidden',
+  }
+
+  return (
+    <div style={wrapStyle}>
+      <LeafletMap
+        position={gps.position}
+        events={events}
+        onlineUsers={onlineUsers}
+        autoCenter={autoCenter}
+        routeCoords={activeRoute?.coords}
+        destination={destination}
+        onMapClick={handleMapClick}
+        onMapMove={handleMapMove}
+        onZoomChange={setZoom}
+        onEventClick={handleEventClick}
+        mapRef={mapRef}
+      />
+
+      {/* Выбор маршрута — 3 варианта */}
+      {selecting && (
+        <RouteSelector
+          routes={routes}
+          onSelect={selectRoute}
+          onCancel={handleClearRoute}
+        />
+      )}
+
+      {/* Навигационная панель */}
+      {navActive && (
+        <NavigationPanel route={activeRoute} position={gps.position} onClear={handleClearRoute} />
+      )}
+
+      {/* Поиск */}
+      {!alertVisible && !navActive && !selecting && (
+        <MapSearch onSelect={handleSearchSelect} />
+      )}
+
+      {/* Алерт */}
+      {alertVisible && (
+        <EventAheadAlert alerts={alerts} onVote={handleVote} onDismiss={dismiss} />
+      )}
+
+      {/* HUD */}
+      {!alertVisible && !activeRoute && !selecting && (
+        <MapHUD gps={gps} onlineCount={onlineUsers.length} eventsCount={events.length} />
+      )}
+
+      {/* Спидометр */}
+      {speedKmh > 2 && !alertVisible && (
+        <Speedometer speedKmh={speedKmh} limitKmh={speedLimit} />
+      )}
+
+      {/* Загрузка маршрута */}
+      {routeLoading && (
+        <div style={{
+          position: 'absolute', bottom: 100, left: '50%', transform: 'translateX(-50%)',
+          backgroundColor: 'rgba(15,15,15,0.9)', borderRadius: 20,
+          padding: '8px 16px', color: '#fff', fontSize: 13, zIndex: 450,
+          backdropFilter: 'blur(8px)',
+        }}>
+          🗺️ Строю маршрут...
+        </div>
+      )}
+
+      {/* Все кнопки — перетаскиваемые */}
+      <ZoomControls zoom={zoom} minZoom={MAP_MIN_ZOOM} maxZoom={MAP_MAX_ZOOM} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} />
+      <RecenterButton active={autoCenter} onRecenter={handleRecenter} />
+      <AddEventFAB onPress={handleFABPress} />
+
+      <AddEventSheet
+        coords={addSheetOpen ? pendingCoords : null}
+        onCreate={handleCreateEvent}
+        onClose={() => { setAddSheetOpen(false); setPendingCoords(null) }}
+        creating={creating}
+      />
+      <EventDetailSheet
+        event={selectedEvent}
+        onVote={handleVote}
+        onClose={() => setSelectedEvent(null)}
+      />
+    </div>
+  )
+}
