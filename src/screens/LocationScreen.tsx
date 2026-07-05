@@ -1,24 +1,25 @@
-import { useEffect, useCallback, useState, useRef } from 'react'
-import type { CSSProperties } from 'react'
-import L from 'leaflet'
-import { LeafletMap, RecenterButton, MAP_MIN_ZOOM, MAP_MAX_ZOOM } from '../components/map/LeafletMap'
-import { AddEventSheet } from '../components/map/AddEventSheet'
-import { EventDetailSheet } from '../components/map/EventDetailSheet'
-import { EventAheadAlert } from '../components/map/EventAheadAlert'
-import { MapHUD, AddEventFAB, ZoomControls } from '../components/map/MapHUD'
-import { Speedometer } from '../components/map/Speedometer'
-import { MapSearch } from '../components/map/MapSearch'
-import { NavigationPanel } from '../components/map/NavigationPanel'
-import { RouteSelector } from '../components/map/RouteSelector'
-import { COLORS, TAB_HEIGHT } from '../components/ui/tokens'
-import { useGPS } from '../hooks/useGPS'
-import { useMapEvents } from '../hooks/useMapEvents'
-import { usePresence } from '../hooks/usePresence'
-import { useEventsAhead } from '../hooks/useEventsAhead'
-import { useSpeedLimit } from '../hooks/useSpeedLimit'
-import { useRoute } from '../hooks/useRoute'
-import type { RoadEvent, EventType } from '../types/event'
-import type { Coords } from '../types/geo'
+
+import { useEffect, useCallback, useState, useRef } from "react"
+import type { CSSProperties } from "react"
+import L from "leaflet"
+import { LeafletMap, RecenterButton, MAP_MIN_ZOOM, MAP_MAX_ZOOM } from "../components/map/LeafletMap"
+import { AddEventSheet } from "../components/map/AddEventSheet"
+import { EventDetailSheet } from "../components/map/EventDetailSheet"
+import { EventAheadAlert } from "../components/map/EventAheadAlert"
+import { MapHUD, AddEventFAB, ZoomControls } from "../components/map/MapHUD"
+import { Speedometer } from "../components/map/Speedometer"
+import { MapSearch } from "../components/map/MapSearch"
+import { NavigationPanel } from "../components/map/NavigationPanel"
+import { COLORS, TAB_HEIGHT } from "../components/ui/tokens"
+import { useGPS } from "../hooks/useGPS"
+import { useMapEvents } from "../hooks/useMapEvents"
+import { usePresence } from "../hooks/usePresence"
+import { useEventsAhead } from "../hooks/useEventsAhead"
+import { useSpeedLimit } from "../hooks/useSpeedLimit"
+import { useRoute } from "../hooks/useRoute"
+import type { Route } from "../hooks/useRoute"
+import type { RoadEvent, EventType } from "../types/event"
+import type { Coords } from "../types/geo"
 
 const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
 
@@ -39,10 +40,7 @@ export function LocationScreen() {
   const { onlineUsers } = usePresence(gps.position)
   const { alerts, dismiss } = useEventsAhead(gps.position, events)
   const speedLimit = useSpeedLimit(gps.position)
-  const {
-    routes, activeRoute, loading: routeLoading, selecting,
-    buildRoute, selectRoute, clearRoute, checkDeviation,
-  } = useRoute()
+  const { routes, activeRoute, loading: routeLoading, selecting, buildRoute, selectRoute, clearRoute, checkDeviation } = useRoute()
 
   const [autoCenter, setAutoCenter] = useState(true)
   const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
@@ -50,18 +48,18 @@ export function LocationScreen() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [destination, setDestination] = useState<Coords | null>(null)
 
-  // Автоперестройка маршрута при отклонении
+  // Автоперестройка
   useEffect(() => {
     if (!gps.position || !activeRoute) return
     void checkDeviation(gps.position.lat, gps.position.lng)
   }, [gps.position?.lat, gps.position?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
-    if (selectedEvent) return
+    if (selectedEvent || selecting) return
     setPendingCoords({ lat, lng })
     setAddSheetOpen(true)
     setAutoCenter(false)
-  }, [selectedEvent])
+  }, [selectedEvent, selecting])
 
   const handleMapMove = useCallback((_center: Coords) => {
     mapCenterRef.current = _center
@@ -69,8 +67,9 @@ export function LocationScreen() {
   }, [])
 
   const handleEventClick = useCallback((ev: RoadEvent) => {
+    if (selecting) return
     setSelectedEvent(ev); setAddSheetOpen(false)
-  }, [])
+  }, [selecting])
 
   const handleCreateEvent = useCallback(async (type: EventType, coords: Coords, description?: string) => {
     const payload = description !== undefined
@@ -80,31 +79,29 @@ export function LocationScreen() {
     setAddSheetOpen(false); setPendingCoords(null)
   }, [createEvent])
 
-  const handleVote = useCallback(async (eventId: string, vote: 'yes' | 'no') => {
+  const handleVote = useCallback(async (eventId: string, vote: "yes" | "no") => {
     await voteOnEvent(eventId, vote)
     setSelectedEvent((prev) => {
       if (!prev || prev.id !== eventId) return prev
       return {
         ...prev,
-        positiveVotes: vote === 'yes' ? prev.positiveVotes + 1 : prev.positiveVotes,
-        negativeVotes: vote === 'no'  ? prev.negativeVotes + 1 : prev.negativeVotes,
+        positiveVotes: vote === "yes" ? prev.positiveVotes + 1 : prev.positiveVotes,
+        negativeVotes: vote === "no" ? prev.negativeVotes + 1 : prev.negativeVotes,
       }
     })
   }, [voteOnEvent])
 
   const handleFABPress = useCallback(() => {
+    if (selecting) return
     const center = gps.position
       ? { lat: gps.position.lat, lng: gps.position.lng }
       : mapCenterRef.current
     setPendingCoords(center); setAddSheetOpen(true)
-  }, [gps.position])
+  }, [gps.position, selecting])
 
   const handleRecenter = useCallback(() => {
-    const map = mapRef.current
-    if (!map) return
-    if (gps.position) {
-      map.setView([gps.position.lat, gps.position.lng], MAP_MAX_ZOOM, { animate: true, duration: 0.6 })
-    }
+    const map = mapRef.current; if (!map) return
+    if (gps.position) map.setView([gps.position.lat, gps.position.lng], MAP_MAX_ZOOM, { animate: true, duration: 0.6 })
     setAutoCenter(true)
   }, [gps.position])
 
@@ -120,6 +117,10 @@ export function LocationScreen() {
     setAutoCenter(false)
   }, [gps.position, buildRoute])
 
+  const handleRouteClick = useCallback((route: Route) => {
+    selectRoute(route)
+  }, [selectRoute])
+
   const handleClearRoute = useCallback(() => {
     clearRoute(); setDestination(null)
   }, [clearRoute])
@@ -128,9 +129,12 @@ export function LocationScreen() {
   const alertVisible = alerts.length > 0 && !addSheetOpen && !selectedEvent && !selecting
   const navActive = !!activeRoute && !alertVisible && !selecting
 
+  // Подсказка "тапни на маршрут"
+  const showRouteTip = selecting && routes.length > 1
+
   const wrapStyle: CSSProperties = {
-    position: 'fixed', top: 0, left: 0, right: 0,
-    bottom: TAB_HEIGHT, backgroundColor: COLORS.bg, overflow: 'hidden',
+    position: "fixed", top: 0, left: 0, right: 0,
+    bottom: TAB_HEIGHT, backgroundColor: COLORS.bg, overflow: "hidden",
   }
 
   return (
@@ -140,22 +144,35 @@ export function LocationScreen() {
         events={events}
         onlineUsers={onlineUsers}
         autoCenter={autoCenter}
-        routeCoords={activeRoute?.coords}
+        routes={routes}
+        activeRoute={activeRoute}
         destination={destination}
+        selecting={selecting}
         onMapClick={handleMapClick}
         onMapMove={handleMapMove}
         onZoomChange={setZoom}
         onEventClick={handleEventClick}
+        onRouteClick={handleRouteClick}
         mapRef={mapRef}
       />
 
-      {/* Выбор маршрута — 3 варианта */}
-      {selecting && (
-        <RouteSelector
-          routes={routes}
-          onSelect={selectRoute}
-          onCancel={handleClearRoute}
-        />
+      {/* Подсказка при выборе маршрута */}
+      {showRouteTip && (
+        <div style={{
+          position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
+          backgroundColor: "rgba(15,15,15,0.92)", borderRadius: 24,
+          padding: "10px 20px", color: "#fff", fontSize: 14, fontWeight: 600,
+          zIndex: 460, whiteSpace: "nowrap",
+          backdropFilter: "blur(8px)", boxShadow: "0 4px 16px rgba(0,0,0,0.4)",
+          display: "flex", alignItems: "center", gap: 8,
+        }}>
+          <span>👆</span>
+          <span>Нажмите на маршрут для выбора</span>
+          <button onClick={handleClearRoute} style={{
+            marginLeft: 8, background: "none", border: "none",
+            color: "rgba(255,255,255,0.6)", fontSize: 16, cursor: "pointer", lineHeight: 1,
+          }}>✕</button>
+        </div>
       )}
 
       {/* Навигационная панель */}
@@ -186,19 +203,20 @@ export function LocationScreen() {
       {/* Загрузка маршрута */}
       {routeLoading && (
         <div style={{
-          position: 'absolute', bottom: 100, left: '50%', transform: 'translateX(-50%)',
-          backgroundColor: 'rgba(15,15,15,0.9)', borderRadius: 20,
-          padding: '8px 16px', color: '#fff', fontSize: 13, zIndex: 450,
-          backdropFilter: 'blur(8px)',
+          position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
+          backgroundColor: "rgba(15,15,15,0.92)", borderRadius: 16,
+          padding: "16px 24px", color: "#fff", fontSize: 15, fontWeight: 600,
+          zIndex: 600, backdropFilter: "blur(8px)",
+          display: "flex", alignItems: "center", gap: 12,
         }}>
-          🗺️ Строю маршрут...
+          <span style={{ fontSize: 24 }}>🗺️</span>
+          <span>Строю маршрут...</span>
         </div>
       )}
 
-      {/* Все кнопки — перетаскиваемые */}
       <ZoomControls zoom={zoom} minZoom={MAP_MIN_ZOOM} maxZoom={MAP_MAX_ZOOM} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} />
       <RecenterButton active={autoCenter} onRecenter={handleRecenter} />
-      <AddEventFAB onPress={handleFABPress} />
+      {!selecting && <AddEventFAB onPress={handleFABPress} />}
 
       <AddEventSheet
         coords={addSheetOpen ? pendingCoords : null}
