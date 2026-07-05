@@ -1,13 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
-import { eventsAhead, haversineMetres, type EventAhead } from '../engines/haversine'
-import type { RoadEvent } from '../types/event'
-import type { GPSPosition } from '../types/geo'
 
-// Адаптивная дистанция как у Яндекса:
-// до 30 км/ч  → 150м
-// 30-60 км/ч  → 300м
-// 60-90 км/ч  → 500м
-// 90+ км/ч    → 700м
+import { useEffect, useRef, useState } from "react"
+import { eventsAhead, type EventAhead } from "../engines/haversine"
+import type { RoadEvent } from "../types/event"
+import type { GPSPosition } from "../types/geo"
+
+// Адаптивная дистанция по скорости
 function alertDistanceM(speedKmh: number): number {
   if (speedKmh < 30) return 150
   if (speedKmh < 60) return 300
@@ -15,9 +12,17 @@ function alertDistanceM(speedKmh: number): number {
   return 700
 }
 
+// Угловая разница с учётом кругового 0-360
+function angleDiff(a: number, b: number): number {
+  const diff = Math.abs(a - b) % 360
+  return Math.min(diff, 360 - diff)
+}
+
 const REPEAT_COOLDOWN_MS = 60_000
 const FOV_DEGREES = 35
 const AUTO_DISMISS_MS = 8_000
+// Максимальная угловая разница для направленных событий (ТЗ №2)
+const HEADING_FILTER_DEG = 45
 
 export interface EventAlert {
   event: RoadEvent
@@ -37,34 +42,44 @@ export function useEventsAhead(
     setAlerts([])
   }
 
-  // Обновляем distanceM в реальном времени для живого счётчика
+  // Обновляем distanceM в реальном времени (живой счётчик в алерте)
   useEffect(() => {
     if (!position || alerts.length === 0) return
+    const { haversineMetres } = require("../engines/haversine") as typeof import("../engines/haversine")
     setAlerts((prev) =>
       prev.map((a) => ({
         ...a,
         distanceM: haversineMetres(position.lat, position.lng, a.event.lat, a.event.lng),
       }))
     )
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [position?.lat, position?.lng])
 
-  // Основная логика — обнаружение новых событий впереди
   useEffect(() => {
     if (!position || position.speed < 1) return
 
     const speedKmh = position.speed * 3.6
     const lookAheadM = alertDistanceM(speedKmh)
 
+    // Исключаем speed_zone из обычных алертов (они обрабатываются useAverageSpeedZone)
+    const alertableEvents = events.filter((e) => e.type !== "speed_zone")
+
     const ahead: EventAhead<RoadEvent>[] = eventsAhead(
       position.lat, position.lng, position.heading,
-      events, lookAheadM, FOV_DEGREES
+      alertableEvents, lookAheadM, FOV_DEGREES
     )
+
+    // ТЗ №2: фильтрация по направлению события
+    const directionFiltered = ahead.filter(({ event }) => {
+      if (event.heading === undefined || event.heading === null) return true
+      // Событие направленное — проверяем угол
+      return angleDiff(event.heading, position.heading) <= HEADING_FILTER_DEG
+    })
 
     const now = Date.now()
     const newAlerts: EventAlert[] = []
 
-    for (const { event, distanceM } of ahead) {
+    for (const { event, distanceM } of directionFiltered) {
       const lastAlert = cooldownRef.current.get(event.id) ?? 0
       if (now - lastAlert > REPEAT_COOLDOWN_MS) {
         newAlerts.push({ event, distanceM })
@@ -74,32 +89,25 @@ export function useEventsAhead(
 
     if (newAlerts.length > 0) {
       setAlerts(newAlerts)
-
-      // Автоудаление через 8 сек
       if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
       dismissTimerRef.current = setTimeout(() => setAlerts([]), AUTO_DISMISS_MS)
 
-      // Голосовое оповещение
-      if ('speechSynthesis' in window) {
+      if ("speechSynthesis" in window) {
         const first = newAlerts[0]!
         const dist = Math.round(first.distanceM / 10) * 10
-        const label = first.event.type === 'camera' ? 'Камера'
-          : first.event.type === 'police' ? 'Полиция'
-          : first.event.type === 'accident' ? 'ДТП'
-          : first.event.type === 'repair' ? 'Дорожные работы'
-          : 'Опасность'
+        const label = first.event.type === "camera"  ? "Камера"
+          : first.event.type === "police"   ? "Полиция"
+          : first.event.type === "accident" ? "ДТП"
+          : first.event.type === "repair"   ? "Дорожные работы"
+          : "Опасность"
         const utt = new SpeechSynthesisUtterance(`${label} через ${dist} метров`)
-        utt.lang = 'ru-RU'
-        utt.rate = 1.1
+        utt.lang = "ru-RU"; utt.rate = 1.1
         window.speechSynthesis.speak(utt)
       }
-
-      if ('vibrate' in navigator) navigator.vibrate([200, 100, 200])
+      if ("vibrate" in navigator) navigator.vibrate([200, 100, 200])
     }
 
-    return () => {
-      if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current)
-    }
+    return () => { if (dismissTimerRef.current) clearTimeout(dismissTimerRef.current) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [position?.lat, position?.lng, position?.heading, position?.speed, events])
 
