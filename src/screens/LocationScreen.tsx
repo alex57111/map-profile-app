@@ -16,8 +16,8 @@ import { useMapEvents } from "../hooks/useMapEvents"
 import { usePresence } from "../hooks/usePresence"
 import { useEventsAhead } from "../hooks/useEventsAhead"
 import { useSpeedLimit } from "../hooks/useSpeedLimit"
-import { useRoute } from "../hooks/useRoute"
-import type { Route } from "../hooks/useRoute"
+import { useRoute, type Route } from "../hooks/useRoute"
+import { useAverageSpeedZone } from "../hooks/useAverageSpeedZone"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
 
@@ -40,7 +40,13 @@ export function LocationScreen() {
   const { onlineUsers } = usePresence(gps.position)
   const { alerts, dismiss } = useEventsAhead(gps.position, events)
   const speedLimit = useSpeedLimit(gps.position)
-  const { routes, activeRoute, loading: routeLoading, selecting, buildRoute, selectRoute, clearRoute, checkDeviation } = useRoute()
+  const {
+    routes, activeRoute, loading: routeLoading, selecting,
+    buildRoute, selectRoute, clearRoute, checkDeviation, updateProgress,
+  } = useRoute()
+
+  // ТЗ №2 шаг 4 — подключаем useAverageSpeedZone
+  useAverageSpeedZone(gps.position, events)
 
   const [autoCenter, setAutoCenter] = useState(true)
   const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
@@ -48,10 +54,11 @@ export function LocationScreen() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [destination, setDestination] = useState<Coords | null>(null)
 
-  // Автоперестройка
+  // ТЗ №1 шаг 4 — updateProgress рядом с checkDeviation
   useEffect(() => {
     if (!gps.position || !activeRoute) return
     void checkDeviation(gps.position.lat, gps.position.lng)
+    void updateProgress(gps.position.lat, gps.position.lng)
   }, [gps.position?.lat, gps.position?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
@@ -71,12 +78,24 @@ export function LocationScreen() {
     setSelectedEvent(ev); setAddSheetOpen(false)
   }, [selecting])
 
-  const handleCreateEvent = useCallback(async (type: EventType, coords: Coords, description?: string) => {
-    const payload = description !== undefined
-      ? { type, lat: coords.lat, lng: coords.lng, description }
-      : { type, lat: coords.lat, lng: coords.lng }
-    await createEvent(payload)
-    setAddSheetOpen(false); setPendingCoords(null)
+  // ТЗ №2 — передаём heading и доп. поля при создании события
+  const handleCreateEvent = useCallback(async (
+    type: EventType,
+    coords: Coords,
+    options?: { description?: string; heading?: number; endLat?: number; endLng?: number; zoneLimitKmh?: number }
+  ) => {
+    await createEvent({
+      type,
+      lat: coords.lat,
+      lng: coords.lng,
+      description: options?.description,
+      heading: options?.heading,
+      endLat: options?.endLat,
+      endLng: options?.endLng,
+      zoneLimitKmh: options?.zoneLimitKmh,
+    })
+    setAddSheetOpen(false)
+    setPendingCoords(null)
   }, [createEvent])
 
   const handleVote = useCallback(async (eventId: string, vote: "yes" | "no") => {
@@ -86,7 +105,7 @@ export function LocationScreen() {
       return {
         ...prev,
         positiveVotes: vote === "yes" ? prev.positiveVotes + 1 : prev.positiveVotes,
-        negativeVotes: vote === "no" ? prev.negativeVotes + 1 : prev.negativeVotes,
+        negativeVotes: vote === "no"  ? prev.negativeVotes + 1 : prev.negativeVotes,
       }
     })
   }, [voteOnEvent])
@@ -96,12 +115,15 @@ export function LocationScreen() {
     const center = gps.position
       ? { lat: gps.position.lat, lng: gps.position.lng }
       : mapCenterRef.current
-    setPendingCoords(center); setAddSheetOpen(true)
+    setPendingCoords(center)
+    setAddSheetOpen(true)
   }, [gps.position, selecting])
 
   const handleRecenter = useCallback(() => {
     const map = mapRef.current; if (!map) return
-    if (gps.position) map.setView([gps.position.lat, gps.position.lng], MAP_MAX_ZOOM, { animate: true, duration: 0.6 })
+    if (gps.position) {
+      map.setView([gps.position.lat, gps.position.lng], MAP_MAX_ZOOM, { animate: true, duration: 0.6 })
+    }
     setAutoCenter(true)
   }, [gps.position])
 
@@ -128,8 +150,6 @@ export function LocationScreen() {
   const speedKmh = gps.position ? gps.position.speed * 3.6 : 0
   const alertVisible = alerts.length > 0 && !addSheetOpen && !selectedEvent && !selecting
   const navActive = !!activeRoute && !alertVisible && !selecting
-
-  // Подсказка "тапни на маршрут"
   const showRouteTip = selecting && routes.length > 1
 
   const wrapStyle: CSSProperties = {
@@ -156,7 +176,7 @@ export function LocationScreen() {
         mapRef={mapRef}
       />
 
-      {/* Подсказка при выборе маршрута */}
+      {/* Подсказка выбора маршрута */}
       {showRouteTip && (
         <div style={{
           position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
@@ -168,39 +188,30 @@ export function LocationScreen() {
         }}>
           <span>👆</span>
           <span>Нажмите на маршрут для выбора</span>
-          <button onClick={handleClearRoute} style={{
-            marginLeft: 8, background: "none", border: "none",
-            color: "rgba(255,255,255,0.6)", fontSize: 16, cursor: "pointer", lineHeight: 1,
-          }}>✕</button>
+          <button onClick={handleClearRoute} style={{ marginLeft: 8, background: "none", border: "none", color: "rgba(255,255,255,0.6)", fontSize: 16, cursor: "pointer", lineHeight: 1 }}>✕</button>
         </div>
       )}
 
-      {/* Навигационная панель */}
       {navActive && (
         <NavigationPanel route={activeRoute} position={gps.position} onClear={handleClearRoute} />
       )}
 
-      {/* Поиск */}
       {!alertVisible && !navActive && !selecting && (
         <MapSearch onSelect={handleSearchSelect} />
       )}
 
-      {/* Алерт */}
       {alertVisible && (
         <EventAheadAlert alerts={alerts} onVote={handleVote} onDismiss={dismiss} />
       )}
 
-      {/* HUD */}
       {!alertVisible && !activeRoute && !selecting && (
         <MapHUD gps={gps} onlineCount={onlineUsers.length} eventsCount={events.length} />
       )}
 
-      {/* Спидометр */}
       {speedKmh > 2 && !alertVisible && (
         <Speedometer speedKmh={speedKmh} limitKmh={speedLimit} />
       )}
 
-      {/* Загрузка маршрута */}
       {routeLoading && (
         <div style={{
           position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)",
@@ -218,8 +229,10 @@ export function LocationScreen() {
       <RecenterButton active={autoCenter} onRecenter={handleRecenter} />
       {!selecting && <AddEventFAB onPress={handleFABPress} />}
 
+      {/* ТЗ №2 — передаём heading пользователя в шторку */}
       <AddEventSheet
         coords={addSheetOpen ? pendingCoords : null}
+        userHeading={gps.position?.heading}
         onCreate={handleCreateEvent}
         onClose={() => { setAddSheetOpen(false); setPendingCoords(null) }}
         creating={creating}
