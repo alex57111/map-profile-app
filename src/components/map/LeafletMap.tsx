@@ -9,6 +9,7 @@ import type { GPSPosition, Coords } from "../../types/geo"
 import { EVENT_TYPE_CONFIG } from "../../types/event"
 import { useDraggable } from "../../hooks/useDraggable"
 import type { Route } from "../../hooks/useRoute"
+import type { OsmCamera } from "../../hooks/useOsmCameras"
 
 import iconUrl from "leaflet/dist/images/marker-icon.png"
 import iconRetinaUrl from "leaflet/dist/images/marker-icon-2x.png"
@@ -35,6 +36,30 @@ function eventIcon(type: RoadEvent["type"]): L.DivIcon {
   })
 }
 
+// Иконка OSM камеры — отличается от пользовательских событий
+function osmCameraIcon(camera: OsmCamera): L.DivIcon {
+  const isAvg = camera.type === "average_speed"
+  const bg = isAvg ? "#EC4899" : "#1D4ED8"  // розовый для средней, синий для обычной
+  const icon = isAvg ? "📏" : "📷"
+  const speedLabel = camera.maxspeed ? `<div style="font-size:9px;font-weight:800;color:white;line-height:1;margin-top:1px">${camera.maxspeed}</div>` : ""
+
+  return L.divIcon({
+    html: `<div style="
+      width:32px;height:32px;border-radius:6px;
+      background:${bg};
+      display:flex;flex-direction:column;align-items:center;justify-content:center;
+      font-size:14px;
+      box-shadow:0 2px 6px rgba(0,0,0,0.5);
+      border:2px solid rgba(255,255,255,0.9);
+      position:relative;
+    ">
+      ${icon}
+      ${speedLabel}
+    </div>`,
+    className: "", iconSize: [32, 32], iconAnchor: [16, 16],
+  })
+}
+
 function destIcon(): L.DivIcon {
   return L.divIcon({
     html: `<div style="font-size:32px;line-height:1;filter:drop-shadow(0 2px 4px rgba(0,0,0,0.5))">🏁</div>`,
@@ -52,10 +77,9 @@ interface Props {
   position: GPSPosition | null
   events: RoadEvent[]
   onlineUsers: OnlineUser[]
+  osmCameras?: OsmCamera[]   // статичные камеры из OSM
   autoCenter: boolean
-  // Все варианты маршрутов (при выборе)
   routes?: Route[]
-  // Выбранный активный маршрут
   activeRoute?: Route | null
   destination?: Coords | null
   selecting?: boolean
@@ -70,8 +94,8 @@ interface Props {
 const DEFAULT_CENTER: [number, number] = [55.7558, 37.6176]
 
 export function LeafletMap({
-  position, events, onlineUsers, autoCenter,
-  routes, activeRoute, destination, selecting,
+  position, events, onlineUsers, osmCameras = [],
+  autoCenter, routes, activeRoute, destination, selecting,
   onMapClick, onMapMove, onZoomChange, onEventClick, onRouteClick, mapRef: externalMapRef,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -80,8 +104,8 @@ export function LeafletMap({
   const ownMarkerRef = useRef<L.Marker | null>(null)
   const clusterGroupRef = useRef<MCGroup>(null)
   const eventMarkersRef = useRef<Map<string, L.Marker>>(new Map())
+  const osmMarkersRef = useRef<Map<string, L.Marker>>(new Map())
   const userMarkersRef = useRef<Map<string, L.Marker>>(new Map())
-  // Линии маршрутов: id -> polyline
   const routeLinesRef = useRef<Map<string, L.Polyline>>(new Map())
   const destMarkerRef = useRef<L.Marker | null>(null)
   const autoCenterRef = useRef(autoCenter)
@@ -119,7 +143,10 @@ export function LeafletMap({
 
     return () => {
       map.remove(); mapRef.current = null; clusterGroupRef.current = null
-      ownMarkerRef.current = null; eventMarkersRef.current.clear(); userMarkersRef.current.clear()
+      ownMarkerRef.current = null
+      eventMarkersRef.current.clear()
+      osmMarkersRef.current.clear()
+      userMarkersRef.current.clear()
       routeLinesRef.current.clear()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -131,7 +158,9 @@ export function LeafletMap({
     if (!map || !position) return
     const latlng = L.latLng(position.lat, position.lng)
     if (!ownMarkerRef.current) {
-      ownMarkerRef.current = L.marker(latlng, { icon: arrowSvg(position.heading), zIndexOffset: 1000, interactive: false }).addTo(map)
+      ownMarkerRef.current = L.marker(latlng, {
+        icon: arrowSvg(position.heading), zIndexOffset: 1000, interactive: false,
+      }).addTo(map)
     } else {
       ownMarkerRef.current.setLatLng(latlng)
       ownMarkerRef.current.setIcon(arrowSvg(position.heading))
@@ -139,12 +168,10 @@ export function LeafletMap({
     if (autoCenterRef.current) map.panTo(latlng, { animate: true, duration: 0.5 })
   }, [position]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Маршруты на карте — все варианты разными цветами
+  // Маршруты
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-
-    // Удаляем старые линии
     for (const line of routeLinesRef.current.values()) line.remove()
     routeLinesRef.current.clear()
     if (destMarkerRef.current) { destMarkerRef.current.remove(); destMarkerRef.current = null }
@@ -153,53 +180,34 @@ export function LeafletMap({
     if (routesToDraw.length === 0) return
 
     const bounds: L.LatLngBounds[] = []
-
     routesToDraw.forEach((route, idx) => {
       const latlngs = route.coords.map((c) => [c.lat, c.lng] as [number, number])
-      const isActive = !selecting || idx === 0
       const line = L.polyline(latlngs, {
         color: route.color,
         weight: selecting ? (idx === 0 ? 7 : 5) : 6,
         opacity: selecting ? (idx === 0 ? 0.95 : 0.65) : 0.9,
-        // Неактивные варианты пунктирные
         dashArray: selecting && idx > 0 ? "10, 6" : undefined,
       })
 
-      // При выборе — клик по линии выбирает маршрут
       if (selecting && onRouteClickRef.current) {
-        line.on("click", (e) => {
-          L.DomEvent.stopPropagation(e)
-          onRouteClickRef.current?.(route)
-        })
-        // Курсор pointer при наведении
+        line.on("click", (e) => { L.DomEvent.stopPropagation(e); onRouteClickRef.current?.(route) })
         line.on("mouseover", () => map.getContainer().style.cursor = "pointer")
-        line.on("mouseout", () => map.getContainer().style.cursor = "")
+        line.on("mouseout",  () => map.getContainer().style.cursor = "")
       }
 
-      // Лейбл маршрута по центру линии
       if (selecting) {
         const midIdx = Math.floor(latlngs.length / 2)
         const mid = latlngs[midIdx]
         if (mid) {
-          const label = L.divIcon({
-            html: `<div style="
-              background:${route.color};color:white;
-              padding:3px 8px;border-radius:10px;
-              font-size:12px;font-weight:700;
-              white-space:nowrap;
-              box-shadow:0 2px 6px rgba(0,0,0,0.4);
-              cursor:pointer;
-            ">${route.label}</div>`,
-            className: "",
-            iconAnchor: [40, 12],
+          const labelMarker = L.marker(mid as [number, number], {
+            icon: L.divIcon({
+              html: `<div style="background:${route.color};color:white;padding:3px 8px;border-radius:10px;font-size:12px;font-weight:700;white-space:nowrap;box-shadow:0 2px 6px rgba(0,0,0,0.4);cursor:pointer">${route.label}</div>`,
+              className: "", iconAnchor: [40, 12],
+            }),
+            interactive: true, zIndexOffset: 100 + idx,
           })
-          const labelMarker = L.marker(mid as [number, number], { icon: label, interactive: true, zIndexOffset: 100 + idx })
-          labelMarker.on("click", (e) => {
-            L.DomEvent.stopPropagation(e)
-            onRouteClickRef.current?.(route)
-          })
+          labelMarker.on("click", (e) => { L.DomEvent.stopPropagation(e); onRouteClickRef.current?.(route) })
           labelMarker.addTo(map)
-          // Храним лейбл как отдельный маркер с ключом label-{id}
           routeLinesRef.current.set(`label-${route.id}`, labelMarker as unknown as L.Polyline)
         }
       }
@@ -209,22 +217,19 @@ export function LeafletMap({
       bounds.push(line.getBounds())
     })
 
-    // Маркер финиша
-    const lastRoute = routesToDraw[0]
-    if (lastRoute && destination) {
+    if (routesToDraw[0] && destination) {
       destMarkerRef.current = L.marker([destination.lat, destination.lng], {
         icon: destIcon(), zIndexOffset: 900,
       }).addTo(map)
     }
 
-    // Показать все маршруты на экране
     if (bounds.length > 0) {
       const combined = bounds.reduce((acc, b) => acc.extend(b), bounds[0]!)
       map.fitBounds(combined, { padding: [50, 50] })
     }
   }, [routes, activeRoute, selecting, destination]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Маркеры событий
+  // Пользовательские события
   useEffect(() => {
     const map = mapRef.current; const cluster = clusterGroupRef.current
     if (!map) return
@@ -244,7 +249,45 @@ export function LeafletMap({
     }
   }, [events]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Маркеры водителей
+  // OSM камеры — статичный слой, не кластеризуются
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+
+    const currentIds = new Set(osmCameras.map((c) => c.id))
+
+    // Удаляем устаревшие
+    for (const [id, marker] of osmMarkersRef.current) {
+      if (!currentIds.has(id)) { marker.remove(); osmMarkersRef.current.delete(id) }
+    }
+
+    // Добавляем новые
+    for (const camera of osmCameras) {
+      if (osmMarkersRef.current.has(camera.id)) continue
+      const marker = L.marker([camera.lat, camera.lng], {
+        icon: osmCameraIcon(camera),
+        zIndexOffset: 200,
+      })
+
+      // Тултип с информацией
+      const tooltipLines = [
+        camera.type === "average_speed" ? "📏 Средняя скорость" : "📷 Камера скорости",
+        camera.maxspeed ? `Лимит: ${camera.maxspeed} км/ч` : "",
+        camera.direction !== undefined ? `Направление: ${Math.round(camera.direction)}°` : "",
+        camera.name ? camera.name : "",
+        "<small style='color:#888'>из OpenStreetMap</small>",
+      ].filter(Boolean).join("<br>")
+
+      marker.bindTooltip(tooltipLines, {
+        permanent: false, direction: "top", offset: [0, -18],
+        className: "leaflet-tooltip-dark",
+      })
+      marker.addTo(map)
+      osmMarkersRef.current.set(camera.id, marker)
+    }
+  }, [osmCameras]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Водители
   useEffect(() => {
     const map = mapRef.current; if (!map) return
     const currentIds = new Set(onlineUsers.map((u) => u.userId))
@@ -268,7 +311,6 @@ export function LeafletMap({
   return <div ref={containerRef} style={{ width: "100%", height: "100%", position: "relative" } as CSSProperties} />
 }
 
-// Кнопка рецентра — перетаскиваемая
 export function RecenterButton({ onRecenter, active }: { onRecenter: () => void; active: boolean }) {
   const { pos, onPointerDown, onPointerMove, onPointerUp, wasTap } = useDraggable({ x: 0, y: 0 })
   return (
