@@ -18,6 +18,7 @@ import { useEventsAhead } from "../hooks/useEventsAhead"
 import { useSpeedLimit } from "../hooks/useSpeedLimit"
 import { useRoute, type Route } from "../hooks/useRoute"
 import { useAverageSpeedZone } from "../hooks/useAverageSpeedZone"
+import { useOsmCameras } from "../hooks/useOsmCameras"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
 
@@ -34,18 +35,19 @@ export function LocationScreen() {
   }, [])
 
   const mapCenterRef = useRef<Coords>(DEFAULT_CENTER)
+  const [mapCenter, setMapCenter] = useState<Coords>(DEFAULT_CENTER)
   const [zoom, setZoom] = useState(14)
 
   const { events, createEvent, voteOnEvent, creating } = useMapEvents(null)
   const { onlineUsers } = usePresence(gps.position)
   const { alerts, dismiss } = useEventsAhead(gps.position, events)
   const speedLimit = useSpeedLimit(gps.position)
+  const osmCameras = useOsmCameras(mapCenter)
   const {
     routes, activeRoute, loading: routeLoading, selecting,
     buildRoute, selectRoute, clearRoute, checkDeviation, updateProgress,
   } = useRoute()
 
-  // ТЗ №2 шаг 4 — подключаем useAverageSpeedZone
   useAverageSpeedZone(gps.position, events)
 
   const [autoCenter, setAutoCenter] = useState(true)
@@ -54,7 +56,7 @@ export function LocationScreen() {
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [destination, setDestination] = useState<Coords | null>(null)
 
-  // ТЗ №1 шаг 4 — updateProgress рядом с checkDeviation
+  // Навигация — checkDeviation + updateProgress
   useEffect(() => {
     if (!gps.position || !activeRoute) return
     void checkDeviation(gps.position.lat, gps.position.lng)
@@ -68,8 +70,9 @@ export function LocationScreen() {
     setAutoCenter(false)
   }, [selectedEvent, selecting])
 
-  const handleMapMove = useCallback((_center: Coords) => {
-    mapCenterRef.current = _center
+  const handleMapMove = useCallback((center: Coords) => {
+    mapCenterRef.current = center
+    setMapCenter(center)
     setAutoCenter(false)
   }, [])
 
@@ -78,24 +81,20 @@ export function LocationScreen() {
     setSelectedEvent(ev); setAddSheetOpen(false)
   }, [selecting])
 
-  // ТЗ №2 — передаём heading и доп. поля при создании события
   const handleCreateEvent = useCallback(async (
     type: EventType,
     coords: Coords,
     options?: { description?: string; heading?: number; endLat?: number; endLng?: number; zoneLimitKmh?: number }
   ) => {
     await createEvent({
-      type,
-      lat: coords.lat,
-      lng: coords.lng,
+      type, lat: coords.lat, lng: coords.lng,
       description: options?.description,
       heading: options?.heading,
       endLat: options?.endLat,
       endLng: options?.endLng,
       zoneLimitKmh: options?.zoneLimitKmh,
     })
-    setAddSheetOpen(false)
-    setPendingCoords(null)
+    setAddSheetOpen(false); setPendingCoords(null)
   }, [createEvent])
 
   const handleVote = useCallback(async (eventId: string, vote: "yes" | "no") => {
@@ -115,8 +114,7 @@ export function LocationScreen() {
     const center = gps.position
       ? { lat: gps.position.lat, lng: gps.position.lng }
       : mapCenterRef.current
-    setPendingCoords(center)
-    setAddSheetOpen(true)
+    setPendingCoords(center); setAddSheetOpen(true)
   }, [gps.position, selecting])
 
   const handleRecenter = useCallback(() => {
@@ -163,6 +161,7 @@ export function LocationScreen() {
         position={gps.position}
         events={events}
         onlineUsers={onlineUsers}
+        osmCameras={osmCameras}
         autoCenter={autoCenter}
         routes={routes}
         activeRoute={activeRoute}
@@ -176,7 +175,20 @@ export function LocationScreen() {
         mapRef={mapRef}
       />
 
-      {/* Подсказка выбора маршрута */}
+      {/* Индикатор загрузки OSM камер */}
+      {osmCameras.length > 0 && !navActive && !alertVisible && !selecting && (
+        <div style={{
+          position: "absolute", top: 58, right: 12,
+          backgroundColor: "rgba(29,78,216,0.85)",
+          borderRadius: 12, padding: "3px 8px",
+          fontSize: 11, color: "#fff", fontWeight: 600,
+          zIndex: 420, backdropFilter: "blur(4px)",
+          display: "flex", alignItems: "center", gap: 4,
+        }}>
+          📷 {osmCameras.length} из OSM
+        </div>
+      )}
+
       {showRouteTip && (
         <div style={{
           position: "absolute", bottom: 100, left: "50%", transform: "translateX(-50%)",
@@ -229,7 +241,6 @@ export function LocationScreen() {
       <RecenterButton active={autoCenter} onRecenter={handleRecenter} />
       {!selecting && <AddEventFAB onPress={handleFABPress} />}
 
-      {/* ТЗ №2 — передаём heading пользователя в шторку */}
       <AddEventSheet
         coords={addSheetOpen ? pendingCoords : null}
         userHeading={gps.position?.heading}
