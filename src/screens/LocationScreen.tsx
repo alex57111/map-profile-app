@@ -19,6 +19,7 @@ import { useSpeedLimit } from "../hooks/useSpeedLimit"
 import { useRoute, type Route } from "../hooks/useRoute"
 import { useAverageSpeedZone } from "../hooks/useAverageSpeedZone"
 import { useOsmCameras } from "../hooks/useOsmCameras"
+import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
 
@@ -40,7 +41,9 @@ export function LocationScreen() {
 
   const { events, createEvent, voteOnEvent, creating } = useMapEvents(null)
   const { onlineUsers } = usePresence(gps.position)
-  const { alerts, dismiss } = useEventsAhead(gps.position, events)
+  const osmZones = useOsmSpeedZones(mapCenter)
+  const combinedEvents = [...events, ...osmZones]
+  const { alerts, dismiss } = useEventsAhead(gps.position, combinedEvents)
   const speedLimit = useSpeedLimit(gps.position)
   const osmCameras = useOsmCameras(mapCenter)
   const {
@@ -48,7 +51,7 @@ export function LocationScreen() {
     buildRoute, selectRoute, clearRoute, checkDeviation, updateProgress,
   } = useRoute()
 
-  useAverageSpeedZone(gps.position, events)
+  useAverageSpeedZone(gps.position, combinedEvents)
 
   const [autoCenter, setAutoCenter] = useState(true)
   const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
@@ -159,7 +162,7 @@ export function LocationScreen() {
     <div style={wrapStyle}>
       <LeafletMap
         position={gps.position}
-        events={events}
+        events={combinedEvents}
         onlineUsers={onlineUsers}
         osmCameras={osmCameras}
         autoCenter={autoCenter}

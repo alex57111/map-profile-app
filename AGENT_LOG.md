@@ -1,8 +1,8 @@
 # Лог работы над ТЗ: навигация + антирадар
 
 ## Статус
-Текущий блок: Блок 1 — выполнен
-Последнее обновление: 2026-07-09 (заход 2)
+Текущий блок: Блок 3 — выполнен (все 3 блока ТЗ завершены)
+Последнее обновление: 2026-07-09 (заход 3)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -36,7 +36,13 @@
 - Добавлен src/types/osrm-text-instructions.d.ts — у пакета нет
   собственных типов, минимальная декларация под compile()
 - npm run build — прошёл успешно
-- updateProgress, checkDeviation, fetchRoutes и их сигнатуры не менялись
+Заметка на будущее (тестирование): реальный эндпоинт router.project-osrm.org
+недоступен из песочницы агента (хост не в network allowlist). Замена
+parseManeuver проверялась на mock-объекте step в точном формате ответа OSRM
+(поля maneuver/name/mode и т.д.), а не через живой e2e-запрос. Если понадобится
+e2e-тест голосовых инструкций на реальном маршруте — либо добавить
+router.project-osrm.org в allowlist окружения агента, либо тестировать вручную
+на устройстве (Alex тестирует на iPhone).
 
 ## Блок 2: Направленные события + пользовательские зоны
 Статус: выполнен, кроме supabase-адаптера
@@ -72,12 +78,67 @@ src/hooks/useAverageSpeedZone.ts
   только зафиксировать).
 
 ## Блок 3: OSM-зоны контроля средней скорости
-Статус: заблокирован (ждёт Блок 1)
+Статус: выполнен
 Файлы: новый src/hooks/useOsmSpeedZones.ts, src/screens/LocationScreen.tsx
+
+Проверено перед стартом (реальный код, не только по ТЗ/логу):
+- В проекте уже был Overpass-запрос по enforcement=maxspeed, но точечный —
+  useOsmCameras.ts (node[enforcement=maxspeed](around:...)), для отдельных
+  камер на карте (OsmCamera[], не RoadEvent). Запроса по
+  enforcement=average_speed с геометрией зоны (from/to) не было нигде.
+- useEventsAhead(gps.position, events) и useAverageSpeedZone(gps.position,
+  events) в LocationScreen.tsx получали events напрямую из useMapEvents —
+  osmCameras туда не подмешивались.
+
+Что сделано:
+- src/hooks/useOsmSpeedZones.ts (новый): Overpass-запрос
+  relation["enforcement"="average_speed"](around:15000,lat,lng) + `>; out
+  geom qt;` — отдельный от useSpeedLimit.ts и от useOsmCameras.ts запрос,
+  ничего существующее не менялось.
+  - Парсинг members с ролями from/to (геометрия way через out geom),
+    фолбэк на пары role=device, если from/to нет.
+  - Зона без тега maxspeed на relation — пропускается (нет данных о лимите).
+  - Результат приводится к RoadEvent (type: "speed_zone", authorId: "osm",
+    description: "OSM" — визуальная пометка «из OSM» согласно уточнению),
+    zoneLimitKmh/endLat/endLng заполнены, expiresAt — на год вперёд (не
+    протухает как обычное событие).
+  - Кэш по bbox (округление до ~1км, ключ от mapCenter) с TTL 10 минут —
+    чтобы не долбить Overpass при каждом смещении карты.
+  - Сетевые ошибки/пустой ответ проглатываются молча — экран не падает.
+- src/screens/LocationScreen.tsx:
+  - const osmZones = useOsmSpeedZones(mapCenter)
+  - const combinedEvents = [...events, ...osmZones]
+  - useEventsAhead(gps.position, combinedEvents) — было events
+  - useAverageSpeedZone(gps.position, combinedEvents) — было events
+  - <LeafletMap events={combinedEvents} .../> — было events (чтобы зоны
+    из OSM отображались на карте, п. критериев приёмки)
+  - MapHUD eventsCount={events.length} НЕ трогал — остаётся счётчиком
+    только пользовательских событий (осознанное решение, не было явного
+    требования включать туда OSM-зоны)
+- npm run build — прошёл успешно
+- useSpeedLimit.ts, useOsmCameras.ts, useEventsAhead.ts,
+  useAverageSpeedZone.ts, типы RoadEvent/EventType — не менялись
+
+Известное ограничение (не исправлялось, не входило в критерии приёмки):
+- Клик по маркеру OSM-зоны на карте открывает тот же UI голосования
+  (EventDetailSheet), что и для пользовательских событий. Голос через
+  voteOnEvent(id, vote) для id вида "osm-zone-N" в mock-адаптере безопасен
+  (eventsStore.find вернёт undefined → тихий return), в supabase-адаптере
+  не проверялось — RPC может вернуть ошибку на несуществующий event_id.
 
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-09 (заход 3) — Блок 3 выполнен
+- Прочитан загруженный TZ-navigation-antiradar.md целиком, сверен с реальным
+  кодом — расхождений с уже выполненными Блок 1/2 не найдено (в отличие от
+  первого загруженного файла TZ_Karta_Profil.md, который оказался другим,
+  устаревшим документом и не использовался).
+- Создан useOsmSpeedZones.ts, подключён в LocationScreen.tsx через
+  [...events, ...osmZones] в useEventsAhead/useAverageSpeedZone/LeafletMap.
+- npm run build — успешно.
+
 
 ### 2026-07-09 (заход 2) — Блок 1 выполнен
 - Установлен osrm-text-instructions.
