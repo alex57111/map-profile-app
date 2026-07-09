@@ -1,8 +1,8 @@
 # Лог работы над ТЗ: навигация + антирадар
 
 ## Статус
-Текущий блок: Блок 3 — выполнен (все 3 блока ТЗ завершены)
-Последнее обновление: 2026-07-09 (заход 3)
+Текущий блок: Блок 4 — выполнен (переход в боевой режим Supabase)
+Последнее обновление: 2026-07-09 (заход 4)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -77,6 +77,80 @@ src/hooks/useAverageSpeedZone.ts
 - Требует правки, не выполнялась (по инструкции — не исправлять сейчас,
   только зафиксировать).
 
+## Блок 4: переход в боевой режим (Supabase)
+Статус: выполнен
+Файлы: новый supabase/schema.sql, src/lib/adapters/supabase/events.ts
+
+Проверено перед стартом (реальный код, не только по логу):
+- Расхождение из Блока 2 подтверждено дословно чтением events.ts: toEvent()
+  не мапил heading/endLat/endLng/zoneLimitKmh, createEvent() слал в RPC
+  только p_type/p_lat/p_lng/p_description.
+- src/lib/supabase.ts — обычный createClient(url, anonKey), без специфики
+  под формат ключа.
+- @supabase/supabase-js в package.json — 2.45.0. Ключ формата
+  sb_publishable_... совместим с клиентскими библиотеками любой версии
+  (подтверждено по официальной документации Supabase на 2026-07-09) —
+  апгрейд пакета не требовался, supabase.ts не менялся.
+- src/lib/adapters/index.ts — переключение по VITE_USE_SUPABASE корректно,
+  не трогалось.
+- Обнаружена зависимость, не описанная явно в ТЗ, но необходимая для
+  сквозной работы: src/lib/adapters/supabase/auth.ts::signInAnonymous()
+  после auth.signInAnonymously() поллит таблицу profiles (3 попытки,
+  300мс), ожидая появления строки — без триггера на auth.users
+  supabase-адаптер аутентификации не заработал бы вообще. Включено в схему.
+
+Что сделано:
+- supabase/schema.sql (новый, полный текст — в репозитории):
+  - Таблица profiles (id/display_name/avatar_url/phone/is_anonymous/
+    created_at) — под auth.ts::toProfile(). RLS: select/update только
+    своей строки (id = auth.uid()). Прямого insert нет — строка создаётся
+    триггером on_auth_user_created (SECURITY DEFINER) при регистрации
+    в auth.users.
+  - Таблица road_events — столбцы по toEvent() + heading/end_lat/end_lng/
+    zone_limit_kmh (фикс расхождения). RLS: select открыт всем
+    (anon, authenticated), прямых insert/update/delete-грантов нет —
+    запись только через RPC.
+  - Таблица event_votes (event_id, user_id, vote) — не читается/не
+    пишется напрямую из адаптера, добавлена как опора для RPC
+    vote_on_event, чтобы один auth.uid() не мог проголосовать за одно
+    событие дважды (аналог votesStore в mock-адаптере). RLS включен,
+    policy нет — доступ только через SECURITY DEFINER функцию.
+  - RPC create_road_event(p_type, p_lat, p_lng, p_description, p_heading,
+    p_end_lat, p_end_lng, p_zone_limit_kmh) — SECURITY DEFINER, требует
+    auth.uid(), TTL вычисляется через CASE по типу, значения (в минутах)
+    захардкожены дословно по EVENT_TYPE_CONFIG (src/types/event.ts):
+    camera 180, police 60, accident 90, repair 480, danger 45,
+    speed_zone 1440. Сверено построчно с event.ts перед коммитом.
+  - RPC vote_on_event(p_event_id, p_vote) — SECURITY DEFINER, требует
+    auth.uid(), инкремент positive/negative_votes через event_votes
+    с уникальным ключом (event_id, user_id); повторный голос того же
+    пользователя молча игнорируется.
+  - GRANT EXECUTE на обе RPC — только роли authenticated (anon не может
+    вызывать напрямую без сессии от signInAnonymously()).
+  - SQL не выполнялся агентом (доступа к реальной БД нет) — Alex вставит
+    вручную в Supabase SQL Editor.
+- src/lib/adapters/supabase/events.ts:
+  - toEvent() — добавлен мапинг heading/endLat/endLng/zoneLimitKmh из
+    row.heading/row.end_lat/row.end_lng/row.zone_limit_kmh (только если
+    не null/undefined — опциональные поля).
+  - createEvent() — в вызов RPC create_road_event добавлены
+    p_heading/p_end_lat/p_end_lng/p_zone_limit_kmh (?? null).
+  - Имена RPC-параметров согласованы 1:1 со схемой в schema.sql.
+  - voteOnEvent()/getEventsInBounds()/subscribeToEvents() не менялись.
+- npm run build — прошёл успешно (879 KB бандл, предупреждение о размере
+  чанка — не новое, не относится к этому блоку).
+
+Известные ограничения (не проверялось, доступа к реальной БД нет):
+- schema.sql не был выполнен и не тестировался на реальном Supabase-проекте
+  агентом — только реверс-инжиниринг из кода + ручная проверка логики SQL
+  чтением. Alex должен применить схему сам и протестировать сквозной сценарий
+  (signInAnonymously → создание профиля триггером → createEvent → RPC →
+  voteOnEvent) вручную на iPhone.
+- Ограничение из Блока 3 (клик по OSM-зоне → голосование по несуществующему
+  event_id "osm-zone-N" в supabase-режиме) не устранялось — RPC vote_on_event
+  в этом случае вернёт ошибку (FK-нарушение на event_votes.event_id), т.к.
+  вне области этого блока.
+
 ## Блок 3: OSM-зоны контроля средней скорости
 Статус: выполнен
 Файлы: новый src/hooks/useOsmSpeedZones.ts, src/screens/LocationScreen.tsx
@@ -129,6 +203,24 @@ src/hooks/useAverageSpeedZone.ts
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-09 (заход 4) — Блок 4 выполнен
+- Прочитан TZ-block4-supabase.md, сверен с реальным кодом (supabase.ts,
+  supabase/events.ts, supabase/auth.ts, adapters/index.ts, types/event.ts,
+  types/user.ts) — расхождение из Блока 2 подтверждено дословно, лог не
+  разошёлся с кодом.
+- Создан supabase/schema.sql: profiles + триггер on_auth_user_created,
+  road_events (с heading/end_lat/end_lng/zone_limit_kmh), event_votes,
+  RPC create_road_event и vote_on_event (SECURITY DEFINER), RLS-политики
+  (select всем на road_events, только через RPC на запись; own-row на
+  profiles; event_votes без прямого доступа).
+- TTL в create_road_event сверены построчно с EVENT_TYPE_CONFIG по прямому
+  указанию Alex перед стартом кодирования.
+- Пофикшено расхождение в events.ts: toEvent()/createEvent() теперь
+  мапят/передают heading/endLat/endLng/zoneLimitKmh.
+- npm run build — успешно.
+- SQL не выполнялся (нет доступа к реальной БД) — сохранён в репозитории,
+  Alex применяет вручную в Supabase SQL Editor.
 
 ### 2026-07-09 (заход 3) — Блок 3 выполнен
 - Прочитан загруженный TZ-navigation-antiradar.md целиком, сверен с реальным
