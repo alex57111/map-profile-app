@@ -19,6 +19,7 @@ create table public.profiles (
   avatar_url    text,
   phone         text,
   is_anonymous  boolean not null default true,
+  is_admin      boolean not null default false,
   created_at    timestamptz not null default now()
 );
 
@@ -31,11 +32,19 @@ create policy profiles_select_own
   using (id = auth.uid());
 
 -- updateProfile(): update .eq("id", user.id) — только своя строка.
+-- ВАЖНО: is_admin намеренно не входит в список разрешённых для UPDATE колонок —
+-- column-level grant ниже физически не даёт клиенту выставить его себе напрямую
+-- через .from("profiles").update(...), даже с id = auth.uid() и валидным RLS.
+-- is_admin можно поменять только через RPC become_admin() (SECURITY DEFINER,
+-- пароль проверяется исключительно на сервере).
 create policy profiles_update_own
   on public.profiles for update
   to authenticated
   using (id = auth.uid())
   with check (id = auth.uid());
+
+revoke update on public.profiles from authenticated;
+grant update (display_name, phone, avatar_url) on public.profiles to authenticated;
 
 -- Прямых INSERT/DELETE-политик нет: строка создаётся только триггером ниже.
 
@@ -191,17 +200,21 @@ grant execute on function public.create_road_event(
 
 
 -- ----------------------------------------------------------------------------
--- 5. RPC vote_on_event
--- Вызывается из voteOnEvent() (supabase/events.ts): p_event_id/p_vote
--- (p_vote = true → positive, false → negative, см. events.ts:
--- vote === "yes" -> p_vote: true).
--- Проверка: один auth.uid() — один голос за событие (event_votes PK),
--- повторный голос молча игнорируется (как в mock-адаптере).
+-- 5. RPC become_admin
+-- Дополнение к Блоку 4 (по прямому указанию Alex): режим "админ" для
+-- неограниченного голосования. Пароль сверяется ИСКЛЮЧИТЕЛЬНО здесь, внутри
+-- SECURITY DEFINER функции — на фронтенде (в JS/бандле) пароль нигде не
+-- хранится и не проверяется, только передаётся строкой в RPC-вызов.
+--
+-- ВНИМАНИЕ — заведомо слабый пароль '321' (3 цифры, перебирается мгновенно
+-- brute-force'ом по RPC). Это осознанный выбор Alex для личного проекта
+-- на раннем этапе (см. AGENT_LOG.md, Блок 4 — дополнение). Если проект
+-- начнёт расти/выйдет за пределы личного использования — заменить на
+-- длинную случайную строку и обязательно добавить rate-limit на вызовы
+-- become_admin (сейчас его нет — ничего не мешает перебирать пароль
+-- скриптом через анонимный ключ).
 -- ----------------------------------------------------------------------------
-create function public.vote_on_event(
-  p_event_id uuid,
-  p_vote     boolean
-)
+create function public.become_admin(p_password text)
 returns void
 language plpgsql
 security definer
@@ -212,6 +225,70 @@ begin
     raise exception 'Not authenticated';
   end if;
 
+  -- Пароль захардкожен только здесь, на сервере. Ошибка намеренно без деталей —
+  -- не подтверждает и не опровергает, что именно было неверно.
+  if p_password is distinct from '321' then
+    raise exception 'Invalid request';
+  end if;
+
+  update public.profiles set is_admin = true where id = auth.uid();
+end;
+$$;
+
+grant execute on function public.become_admin(text) to authenticated;
+
+
+-- ----------------------------------------------------------------------------
+-- 6. RPC vote_on_event
+-- Вызывается из voteOnEvent() (supabase/events.ts): p_event_id/p_vote
+-- (p_vote = true → positive, false → negative, см. events.ts:
+-- vote === "yes" -> p_vote: true).
+--
+-- Обычный пользователь: один auth.uid() — один голос за событие
+-- (event_votes PK), повторный голос молча игнорируется (как в mock-адаптере).
+--
+-- Админ (profiles.is_admin = true, выставляется только через become_admin()):
+-- уникальность голоса не проверяется — каждый вызов увеличивает счётчик,
+-- даже если это тот же auth.uid() и то же событие (по прямому указанию Alex,
+-- Блок 4 — дополнение). Строка в event_votes для админа при этом
+-- перезаписывается (ON CONFLICT DO UPDATE) — таблица хранит последний голос
+-- для справки, но НЕ отражает реальное количество голосов админа, т.к.
+-- счётчик в road_events растёт при каждом вызове независимо от конфликта.
+-- ----------------------------------------------------------------------------
+create function public.vote_on_event(
+  p_event_id uuid,
+  p_vote     boolean
+)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_is_admin boolean;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select coalesce(is_admin, false) into v_is_admin
+  from public.profiles where id = auth.uid();
+
+  if v_is_admin then
+    -- Админ: неограниченное голосование, уникальность не проверяется.
+    insert into public.event_votes (event_id, user_id, vote, created_at)
+    values (p_event_id, auth.uid(), p_vote, now())
+    on conflict (event_id, user_id) do update set vote = excluded.vote, created_at = now();
+
+    if p_vote then
+      update public.road_events set positive_votes = positive_votes + 1 where id = p_event_id;
+    else
+      update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id;
+    end if;
+    return;
+  end if;
+
+  -- Обычный пользователь: один голос на событие.
   insert into public.event_votes (event_id, user_id, vote)
   values (p_event_id, auth.uid(), p_vote)
   on conflict (event_id, user_id) do nothing;
