@@ -10,6 +10,11 @@ function toEvent(row: any): RoadEvent {
     lat: row.lat, lng: row.lng, description: row.description,
     positiveVotes: row.positive_votes, negativeVotes: row.negative_votes,
     expiresAt: row.expires_at, createdAt: row.created_at,
+    // Расхождение Блока 2 (см. AGENT_LOG.md) — теперь мапится из строки БД
+    ...(row.heading !== null && row.heading !== undefined && { heading: row.heading }),
+    ...(row.end_lat !== null && row.end_lat !== undefined && { endLat: row.end_lat }),
+    ...(row.end_lng !== null && row.end_lng !== undefined && { endLng: row.end_lng }),
+    ...(row.zone_limit_kmh !== null && row.zone_limit_kmh !== undefined && { zoneLimitKmh: row.zone_limit_kmh }),
   }
 }
 
@@ -25,6 +30,8 @@ export const supabaseEventsAdapter: EventsAdapter = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const { data, error } = await (db as any).rpc("create_road_event", {
       p_type: payload.type, p_lat: payload.lat, p_lng: payload.lng, p_description: payload.description ?? null,
+      p_heading: payload.heading ?? null, p_end_lat: payload.endLat ?? null,
+      p_end_lng: payload.endLng ?? null, p_zone_limit_kmh: payload.zoneLimitKmh ?? null,
     })
     if (error || !data) throw new Error(String(error?.message ?? "Create event failed"))
     return toEvent(data)
