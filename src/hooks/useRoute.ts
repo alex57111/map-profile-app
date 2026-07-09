@@ -2,6 +2,10 @@
 import { useCallback, useRef, useState } from "react"
 import type { Coords } from "../types/geo"
 import { haversineMetres } from "../engines/haversine"
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+import OSRMTextInstructions from "osrm-text-instructions"
+
+const osrmTextInstructions = OSRMTextInstructions("v5")
 
 export interface RouteStep {
   instruction: string
@@ -21,34 +25,14 @@ export interface Route {
   durationS: number
 }
 
-const MANEUVER_RU: Record<string, string> = {
-  "turn-left":         "Поверните налево",
-  "turn-right":        "Поверните направо",
-  "turn-slight-left":  "Держитесь левее",
-  "turn-slight-right": "Держитесь правее",
-  "turn-sharp-left":   "Резкий поворот налево",
-  "turn-sharp-right":  "Резкий поворот направо",
-  "uturn":             "Разворот",
-  "roundabout":        "Въезжайте в кольцо",
-  "arrive":            "Вы прибыли",
-  "depart":            "Начинайте движение",
-  "continue":          "Продолжайте движение",
-  "new name":          "Продолжайте движение",
-  "end of road":       "В конце дороги",
-  "fork":              "На развилке",
-}
-
-function parseManeuver(type: string, modifier?: string): string {
-  const key = type + (modifier ? `-${modifier}` : "")
-  return MANEUVER_RU[key] ?? MANEUVER_RU[type] ?? "Продолжайте движение"
-}
-
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function parseOsrmRoute(r: any, id: string, label: string, color: string): Route {
   const coords: Coords[] = r.geometry.coordinates.map((c: number[]) => ({ lat: c[1], lng: c[0] }))
+  const legCount = r.legs.length
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const steps: RouteStep[] = r.legs[0].steps.map((s: any) => ({
-    instruction: parseManeuver(s.maneuver?.type ?? "continue", s.maneuver?.modifier),
+    // ТЗ №1: полный объект step из OSRM — чтобы в тексте появлялось название улицы
+    instruction: osrmTextInstructions.compile("ru", s, { legIndex: 0, legCount }) || "Продолжайте движение",
     distanceM: s.distance,
     lat: s.maneuver.location[1],
     lng: s.maneuver.location[0],

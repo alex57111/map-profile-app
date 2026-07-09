@@ -1,8 +1,8 @@
 # Лог работы над ТЗ: навигация + антирадар
 
 ## Статус
-Текущий блок: не начат (ближайший к выполнению — Блок 1)
-Последнее обновление: 2026-07-09
+Текущий блок: Блок 1 — выполнен
+Последнее обновление: 2026-07-09 (заход 2)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -14,9 +14,29 @@
   без явного указания в конкретном блоке
 
 ## Блок 1: Голос по шагам + osrm-text-instructions
-Статус: не начат
-Файлы: package.json, src/hooks/useRoute.ts, src/screens/LocationScreen.tsx
-Проверено перед стартом: osrm-text-instructions в package.json отсутствует — подтверждено.
+Статус: выполнен
+Файлы: package.json, package-lock.json, src/hooks/useRoute.ts,
+новый src/types/osrm-text-instructions.d.ts
+
+Что уже было сделано ДО этого захода (проверено и не трогалось):
+- currentStepIndexRef, updateProgress с порогами 250м/50м в useRoute.ts
+- Подключение updateProgress в LocationScreen.tsx рядом с checkDeviation
+  (строки 62-63)
+
+Что сделано в этом заходе:
+- npm install osrm-text-instructions (добавлен в package.json/package-lock.json)
+- В parseOsrmRoute instruction теперь формируется через
+  osrmTextInstructions.compile("ru", s, { legIndex: 0, legCount }),
+  куда передаётся весь объект step из ответа OSRM (не только type/modifier) —
+  за счёт этого в тексте появляется название улицы (name из step)
+- MANEUVER_RU и parseManeuver удалены — проверено, что нигде больше
+  не используются (grep по src/ дал совпадения только в useRoute.ts)
+- Поле maneuver в RouteStep не тронуто, используется как раньше для
+  внутренней логики (isLastStep в updateProgress)
+- Добавлен src/types/osrm-text-instructions.d.ts — у пакета нет
+  собственных типов, минимальная декларация под compile()
+- npm run build — прошёл успешно
+- updateProgress, checkDeviation, fetchRoutes и их сигнатуры не менялись
 
 ## Блок 2: Направленные события + пользовательские зоны
 Статус: выполнен, кроме supabase-адаптера
@@ -58,6 +78,17 @@ src/hooks/useAverageSpeedZone.ts
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-09 (заход 2) — Блок 1 выполнен
+- Установлен osrm-text-instructions.
+- parseManeuver заменён на osrmTextInstructions.compile("ru", s, {legIndex, legCount})
+  с передачей полного step-объекта — в тексте появляются названия улиц.
+- MANEUVER_RU и parseManeuver удалены (не использовались больше нигде).
+- Добавлена декларация типов src/types/osrm-text-instructions.d.ts.
+- npm run build — успешно.
+- Протестировано на реалистичных mock OSRM step-объектах (прямой доступ к
+  router.project-osrm.org из песочницы недоступен — хост не в allowlist):
+  "Поверните направо" → "Поверните направо на Настасьинский переулок" и т.п.
 
 ### 2026-07-09 — Подготовительный шаг
 - Проверено состояние репозитория перед стартом ТЗ.
