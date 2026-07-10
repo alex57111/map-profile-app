@@ -23,7 +23,7 @@ import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
 // TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать вместе с debug-баннером ниже
-import { DEBUG_VITE_USE_SUPABASE_RAW, DEBUG_USE_SUPABASE } from "../lib/adapters/index"
+import { DebugBanner } from "../components/DebugBanner"
 
 const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
 
@@ -170,14 +170,7 @@ export function LocationScreen() {
   return (
     <div style={wrapStyle}>
       {/* TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать после решения проблемы */}
-      <div style={{
-        position: "absolute", top: 4, left: 4, zIndex: 9999,
-        backgroundColor: "rgba(0,0,0,0.75)", color: "#0f0",
-        fontSize: 9, fontFamily: "monospace", padding: "3px 6px",
-        borderRadius: 4, pointerEvents: "none", lineHeight: 1.4,
-      }}>
-        RAW={DEBUG_VITE_USE_SUPABASE_RAW} | USE_SUPABASE={String(DEBUG_USE_SUPABASE)}
-      </div>
+      <DebugBanner />
 
       <LeafletMap
         position={gps.position}
