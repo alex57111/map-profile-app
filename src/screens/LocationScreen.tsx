@@ -65,7 +65,16 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
 
   const [autoCenter, setAutoCenter] = useState(true)
   const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
-  const [selectedEvent, setSelectedEvent] = useState<RoadEvent | null>(null)
+  // Раньше selectedEvent был "замороженным" снимком RoadEvent на момент
+  // клика по маркеру — не связан с realtime-обновлениями events, поэтому
+  // ни удаление события на сервере, ни чужие голоса сюда не долетали.
+  // Теперь храним только id, сам объект — деривация из combinedEvents
+  // (того же списка, что уже рисует маркеры и обновляется через
+  // useMapEvents/postgres_changes), поэтому обе проблемы чинятся сами.
+  const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
+  const selectedEvent = selectedEventId
+    ? combinedEvents.find((e) => e.id === selectedEventId) ?? null
+    : null
   const [addSheetOpen, setAddSheetOpen] = useState(false)
   const [destination, setDestination] = useState<Coords | null>(null)
 
@@ -92,7 +101,7 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
 
   const handleEventClick = useCallback((ev: RoadEvent) => {
     if (selecting) return
-    setSelectedEvent(ev); setAddSheetOpen(false)
+    setSelectedEventId(ev.id); setAddSheetOpen(false)
   }, [selecting])
 
   const handleCreateEvent = useCallback(async (
@@ -120,14 +129,10 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
 
   const handleVote = useCallback(async (eventId: string, vote: "yes" | "no") => {
     await voteOnEvent(eventId, vote)
-    setSelectedEvent((prev) => {
-      if (!prev || prev.id !== eventId) return prev
-      return {
-        ...prev,
-        positiveVotes: vote === "yes" ? prev.positiveVotes + 1 : prev.positiveVotes,
-        negativeVotes: vote === "no"  ? prev.negativeVotes + 1 : prev.negativeVotes,
-      }
-    })
+    // Раньше здесь вручную инкрементился счётчик в selectedEvent — больше
+    // не нужно: selectedEvent теперь деривация от combinedEvents, и как
+    // только useMapEvents перефетчит events по postgres_changes, актуальный
+    // счётчик (или отсутствие события, если оно удалено) подтянется сам.
   }, [voteOnEvent])
 
   const handleFABPress = useCallback(() => {
@@ -289,7 +294,7 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
       <EventDetailSheet
         event={selectedEvent}
         onVote={handleVote}
-        onClose={() => setSelectedEvent(null)}
+        onClose={() => setSelectedEventId(null)}
       />
     </div>
   )
