@@ -224,9 +224,69 @@ scope (Preview вместо Production), собранный бандл её не
 
 npm run build — успешно.
 
-**⚠️ TODO после диагностики и решения проблемы**: убрать все 4 правки
-(баннер, alert'ы, TEMP DIAG-комментарии) — grep по `TEMP DIAG` в репозитории
-покажет все места.
+**⚠️ TODO после диагностики и решения проблемы**: убрать все правки
+(баннер, alert'ы, TEMP DIAG-комментарии, файл src/components/DebugBanner.tsx) —
+grep по `TEMP DIAG` в репозитории покажет все места.
+
+### Продолжение диагностики: разбор кодовой части (RAW=undefined подтверждён)
+Alex подтвердил баннером: `RAW=undefined | USE_SUPABASE=false` — переменная
+не попадает в бандл, хотя в Cloudflare Pages Dashboard задана (проверено
+скриншотом, три Plaintext-переменные, имена верные).
+
+Проверено на стороне кода — везде чисто, причина НЕ здесь:
+- `vite.config.ts` — минимальный, никакого `envPrefix` или фильтрации env
+  нет (значит используется дефолтный префикс `VITE_`, всё как надо).
+- `.env`/`.env.production`/`.env.local` в репозитории НЕ закоммичены —
+  `git ls-files`/`find` подтверждают, есть только `.env.example` (не
+  участвует в сборке) и `.env.local` в `.gitignore` (значит даже если у
+  кого-то локально есть файл, в репозиторий он не попадёт и не мог
+  затенить переменные на Cloudflare).
+- `public/` — нет `_headers`/`_redirects`/`functions/`, которые могли бы
+  что-то переопределять.
+- `package.json` → `"build": "vite build"` — обычная команда без доп. флагов.
+- `.node-version` = 20 — актуальная LTS, не причина.
+
+Вывод: раз ДАЖЕ `VITE_USE_SUPABASE` (простейшая булева строка) не долетает
+до бандла, дело не в конкретной переменной и не в коде проекта — проблема
+на стороне того, ЧТО и КАК Cloudflare Pages реально собирает и
+деплоит.
+
+**Агент не смог продолжить диагностику дальше самостоятельно**: нет доступа
+к Cloudflare Pages в этой сессии — MCP-инструменты Cloudflare, которые
+удалось загрузить (`Cloudflare Developer Platform`), покрывают только
+Workers/D1/R2/KV/Hyperdrive, инструмента для Pages (Settings → Builds,
+Environment Variables, история деплоев) там нет, отдельного Cloudflare API
+токена в этой сессии тоже не было передано (только GitHub PAT для репо).
+
+Нужно от Alex (любое из двух):
+1. Прислать текстом/скриншотом Settings → Builds & deployments: значение
+   полей **Build command** и **Build output directory** — совпадают ли с
+   `npm run build`/`dist`, которые тестируются здесь.
+2. ИЛИ прислать Cloudflare API-токен с доступом к Pages (Zone/Account:
+   Pages Read или выше) — тогда агент проверит конфиг и последние деплои
+   сам через Cloudflare API.
+
+Наиболее вероятные версии (для сверки Alex-ом, без доступа к панели —
+только гипотезы, не подтверждено):
+1. **Deploy = "Retry deployment" на старом билде**, а не новый деплой —
+   известное поведение Cloudflare Pages: Retry переиспользует снэпшот
+   env-переменных ИЗ МОМЕНТА того старого билда, не подхватывает
+   переменные, добавленные после. Нужен новый commit/push или явный
+   "Create deployment", а не Retry.
+2. **Переменные заданы для окружения "Preview", а раздаётся "Production"**
+   (или наоборот) — в Cloudflare Pages переменные скоупятся по
+   Production/Preview отдельно, нужно смотреть, для какого именно
+   окружения проставлены значения на скриншоте и с каким URL Alex
+   тестирует.
+3. Деплой в реальности идёт НЕ через Git-интеграцию Cloudflare (где
+   Cloudflare сам клонирует репо и запускает Build command из настроек),
+   а через **прямую заливку уже собранного `dist/`** (Direct Upload/
+   Wrangler CLI) — в этом случае Dashboard-переменные из Settings → Builds
+   в принципе не участвуют в сборке, т.к. сборка происходит не на стороне
+   Cloudflare. Это стоит исключить в первую очередь: если деплой шёл через
+   `wrangler pages deploy`/аналогичный API-вызов с уже готовой папкой
+   `dist`, а не через push в GitHub с последующей автосборкой Cloudflare —
+   вот и причина.
 
 ## Блок 3: OSM-зоны контроля средней скорости
 Статус: выполнен
@@ -277,9 +337,40 @@ npm run build — успешно.
   (eventsStore.find вернёт undefined → тихий return), в supabase-адаптере
   не проверялось — RPC может вернуть ошибку на несуществующий event_id.
 
+### Доработка debug-баннера (по запросу Alex — раз он всё равно временный)
+Вынесен в отдельный файл `src/components/DebugBanner.tsx` (весь целиком
+TEMP DIAG, удалить вместе с импортом в LocationScreen.tsx).
+- Текст теперь в `<pre>` с `userSelect: "text"` — выделяется на мобильном.
+- Кнопка "Copy" — `navigator.clipboard.writeText()`, с фолбэком через
+  скрытый `<textarea>` + `document.execCommand("copy")` для браузеров без
+  Clipboard API/вне HTTPS-контекста.
+- Состав диагностической информации расширен: `MODE` (import.meta.env.MODE),
+  `VITE_SUPABASE_URL` (значение — не секрет, был явно передан Alex-ом в
+  тексте ТЗ ранее), `VITE_SUPABASE_ANON_KEY` — только true/false наличия
+  (сам ключ не выводится), и результат ping-запроса напрямую через
+  supabase-клиент (`select("id", {head:true})` к road_events) — успех
+  с числом строк или текст ошибки. Ping идёт независимо от того, какой
+  адаптер выбран (mock/supabase) — тестирует именно связность/валидность
+  env, а не текущий режим приложения.
+
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-09 (заход 7) — Разбор причины RAW=undefined + расширение баннера
+- Alex подтвердил баннером: переменная не в бандле, хотя в Cloudflare
+  Dashboard задана верно.
+- Проверил vite.config.ts/.env*/public/_headers/.node-version/package.json —
+  всё чисто, причина не в коде проекта.
+- Доступа к Cloudflare Pages в сессии нет (MCP покрывает только Workers/D1/
+  R2/KV/Hyperdrive, API-токена для Pages не передавали) — запросил у Alex
+  Settings → Builds или Cloudflare API-токен, привёл 3 наиболее вероятные
+  гипотезы (Retry deployment на старом снэпшоте env / Production-Preview
+  mismatch / деплой идёт Direct Upload мимо Cloudflare-сборки).
+- Вынес DebugBanner в src/components/DebugBanner.tsx: copy-кнопка,
+  выделяемый текст, MODE, presence VITE_SUPABASE_ANON_KEY, значение
+  VITE_SUPABASE_URL, ping-запрос к Supabase напрямую через клиент.
+- npm run build — успешно.
 
 ### 2026-07-09 (заход 6) — ВРЕМЕННАЯ диагностика supabase-режима
 - Debug-баннер в LocationScreen.tsx (VITE_USE_SUPABASE raw + boolean).
