@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { COLORS, FONT, SPACING, RADIUS } from '../ui/tokens'
 import { EVENT_TYPE_CONFIG } from '../../types/event'
 import type { RoadEvent } from '../../types/event'
@@ -5,10 +6,28 @@ import type { RoadEvent } from '../../types/event'
 interface Props { event: RoadEvent | null; onVote: (eventId: string, vote: 'yes' | 'no') => Promise<void>; onClose: () => void }
 
 export function EventDetailSheet({ event, onVote, onClose }: Props) {
+  // По образцу EventAheadAlert.tsx: блокируем повторный тап по кнопкам
+  // после голоса — сервер и так молча игнорирует второй голос того же
+  // юзера (одно правило на событие в vote_on_event), но без этого кнопки
+  // визуально выглядят активными, будто голос не засчитался.
+  const [voted, setVoted] = useState(false)
+
+  // Хуки должны идти до раннего return — сброс по event?.id, аналогично
+  // сбросу в EventAheadAlert по alerts[0]?.event.id.
+  useEffect(() => {
+    setVoted(false)
+  }, [event?.id])
+
   if (!event) return null
   const cfg = EVENT_TYPE_CONFIG[event.type]
   const score = event.positiveVotes - event.negativeVotes
   const expiresIn = Math.max(0, Math.round((new Date(event.expiresAt).getTime() - Date.now()) / 60_000))
+
+  const handleVote = async (vote: 'yes' | 'no') => {
+    if (voted) return
+    await onVote(event.id, vote)
+    setVoted(true)
+  }
 
   return (
     <div style={{ position: 'fixed', inset: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 600, display: 'flex', alignItems: 'flex-end' }} onClick={onClose}>
@@ -40,13 +59,19 @@ export function EventDetailSheet({ event, onVote, onClose }: Props) {
         </div>
 
         <div style={{ display: 'flex', gap: SPACING.sm, marginBottom: SPACING.sm }}>
-          <button onClick={() => void onVote(event.id, 'yes')} style={{
-            flex: 1, padding: '12px', backgroundColor: COLORS.success + '22', border: `1px solid ${COLORS.success}`,
-            borderRadius: RADIUS.md, color: COLORS.success, fontSize: FONT.base, fontWeight: 600, cursor: 'pointer',
+          <button onClick={() => void handleVote('yes')} disabled={voted} style={{
+            flex: 1, padding: '12px',
+            backgroundColor: voted ? COLORS.bgElevated : COLORS.success + '22',
+            border: `1px solid ${voted ? COLORS.border : COLORS.success}`,
+            borderRadius: RADIUS.md, color: voted ? COLORS.textDisabled : COLORS.success,
+            fontSize: FONT.base, fontWeight: 600, cursor: voted ? 'default' : 'pointer',
           }}>👍 Да ({event.positiveVotes})</button>
-          <button onClick={() => void onVote(event.id, 'no')} style={{
-            flex: 1, padding: '12px', backgroundColor: COLORS.error + '22', border: `1px solid ${COLORS.error}`,
-            borderRadius: RADIUS.md, color: COLORS.error, fontSize: FONT.base, fontWeight: 600, cursor: 'pointer',
+          <button onClick={() => void handleVote('no')} disabled={voted} style={{
+            flex: 1, padding: '12px',
+            backgroundColor: voted ? COLORS.bgElevated : COLORS.error + '22',
+            border: `1px solid ${voted ? COLORS.border : COLORS.error}`,
+            borderRadius: RADIUS.md, color: voted ? COLORS.textDisabled : COLORS.error,
+            fontSize: FONT.base, fontWeight: 600, cursor: voted ? 'default' : 'pointer',
           }}>👎 Нет ({event.negativeVotes})</button>
         </div>
 
