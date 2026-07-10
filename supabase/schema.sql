@@ -287,9 +287,11 @@ begin
     else
       update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
         returning positive_votes, negative_votes into v_pos, v_neg;
-      -- Порог -3 — держать в синхроне с mock-адаптером (mock/events.ts:
-      -- if (ev.positiveVotes - ev.negativeVotes <= -3) удаляет событие).
-      if v_pos - v_neg <= -3 then
+      -- Порог -1 — держать в синхроне с mock-адаптером (mock/events.ts:
+      -- if (ev.positiveVotes - ev.negativeVotes <= -1) удаляет событие).
+      -- Было -3, изменено на -1 вручную в живой БД, затем синхронизировано
+      -- здесь и в mock — см. AGENT_LOG.md.
+      if v_pos - v_neg <= -1 then
         delete from public.road_events where id = p_event_id;
       end if;
     end if;
@@ -310,8 +312,8 @@ begin
   else
     update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
       returning positive_votes, negative_votes into v_pos, v_neg;
-    -- Порог -3 — держать в синхроне с mock-адаптером (см. комментарий выше).
-    if v_pos - v_neg <= -3 then
+    -- Порог -1 — держать в синхроне с mock-адаптером (см. комментарий выше).
+    if v_pos - v_neg <= -1 then
       delete from public.road_events where id = p_event_id;
     end if;
   end if;
