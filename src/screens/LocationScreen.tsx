@@ -22,6 +22,8 @@ import { useOsmCameras } from "../hooks/useOsmCameras"
 import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
+// TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать вместе с debug-баннером ниже
+import { DEBUG_VITE_USE_SUPABASE_RAW, DEBUG_USE_SUPABASE } from "../lib/adapters/index"
 
 const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
 
@@ -89,14 +91,21 @@ export function LocationScreen() {
     coords: Coords,
     options?: { description?: string; heading?: number; endLat?: number; endLng?: number; zoneLimitKmh?: number }
   ) => {
-    await createEvent({
-      type, lat: coords.lat, lng: coords.lng,
-      description: options?.description,
-      heading: options?.heading,
-      endLat: options?.endLat,
-      endLng: options?.endLng,
-      zoneLimitKmh: options?.zoneLimitKmh,
-    })
+    try {
+      await createEvent({
+        type, lat: coords.lat, lng: coords.lng,
+        description: options?.description,
+        heading: options?.heading,
+        endLat: options?.endLat,
+        endLng: options?.endLng,
+        zoneLimitKmh: options?.zoneLimitKmh,
+      })
+    } catch (e) {
+      // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой.
+      // useMapEvents.createEvent уже показывает alert и рестрасывает ошибку —
+      // здесь просто не даём sheet закрыться, чтобы было видно, что упало.
+      return
+    }
     setAddSheetOpen(false); setPendingCoords(null)
   }, [createEvent])
 
@@ -160,6 +169,16 @@ export function LocationScreen() {
 
   return (
     <div style={wrapStyle}>
+      {/* TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать после решения проблемы */}
+      <div style={{
+        position: "absolute", top: 4, left: 4, zIndex: 9999,
+        backgroundColor: "rgba(0,0,0,0.75)", color: "#0f0",
+        fontSize: 9, fontFamily: "monospace", padding: "3px 6px",
+        borderRadius: 4, pointerEvents: "none", lineHeight: 1.4,
+      }}>
+        RAW={DEBUG_VITE_USE_SUPABASE_RAW} | USE_SUPABASE={String(DEBUG_USE_SUPABASE)}
+      </div>
+
       <LeafletMap
         position={gps.position}
         events={combinedEvents}
