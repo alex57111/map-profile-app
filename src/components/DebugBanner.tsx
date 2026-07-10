@@ -15,17 +15,18 @@ export function DebugBanner() {
     // Лёгкий пингующий запрос напрямую через supabase-клиент — независимо от
     // того, какой адаптер выбран (mock/supabase), чтобы проверить саму
     // связность и валидность env-переменных.
-    supabase
-      .from("road_events")
-      .select("id", { count: "exact", head: true })
-      .then(({ error, count }) => {
+    void (async () => {
+      try {
+        const { error, count } = await supabase
+          .from("road_events")
+          .select("id", { count: "exact", head: true })
         if (cancelled) return
         setPingStatus(error ? `FAIL: ${error.message}` : `OK (rows=${count ?? "?"})`)
-      })
-      .catch((e: unknown) => {
+      } catch (e) {
         if (cancelled) return
         setPingStatus(`THROW: ${e instanceof Error ? e.message : String(e)}`)
-      })
+      }
+    })()
     return () => { cancelled = true }
   }, [])
 
