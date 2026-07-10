@@ -43,11 +43,19 @@ export const supabaseEventsAdapter: EventsAdapter = {
   },
   subscribeToEvents(onUpdate: (events: RoadEvent[]) => void): () => void {
     void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
-      .then(({ data }) => onUpdate(((data ?? []) as any[]).map(toEvent)))
+      .then(({ data, error }) => {
+        // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
+        if (error) alert("DEBUG getEventsInBounds/subscribe error: " + error.message)
+        onUpdate(((data ?? []) as any[]).map(toEvent))
+      })
     const channel = supabase.channel("public:road_events")
       .on("postgres_changes", { event: "*", schema: "public", table: "road_events" },
         () => void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
-          .then(({ data }) => onUpdate(((data ?? []) as any[]).map(toEvent))))
+          .then(({ data, error }) => {
+            // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
+            if (error) alert("DEBUG realtime refetch error: " + error.message)
+            onUpdate(((data ?? []) as any[]).map(toEvent))
+          }))
       .subscribe()
     return () => { void supabase.removeChannel(channel) }
   },
