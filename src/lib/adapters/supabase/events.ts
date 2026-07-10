@@ -1,5 +1,6 @@
 
 import { db, supabase } from "../../supabase"
+import { Sentry } from "../../sentry"
 import type { EventsAdapter } from "../interface"
 import type { RoadEvent, CreateEventPayload, VoteValue } from "../../../types/event"
 
@@ -44,19 +45,35 @@ export const supabaseEventsAdapter: EventsAdapter = {
   subscribeToEvents(onUpdate: (events: RoadEvent[]) => void): () => void {
     void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
       .then(({ data, error }) => {
-        // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
-        if (error) alert("DEBUG getEventsInBounds/subscribe error: " + error.message)
+        if (error) {
+          Sentry.captureException(new Error(error.message), {
+            tags: { op: 'subscribeToEvents.initialFetch' },
+          })
+        }
         onUpdate(((data ?? []) as any[]).map(toEvent))
       })
     const channel = supabase.channel("public:road_events")
       .on("postgres_changes", { event: "*", schema: "public", table: "road_events" },
         () => void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
           .then(({ data, error }) => {
-            // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
-            if (error) alert("DEBUG realtime refetch error: " + error.message)
+            if (error) {
+              Sentry.captureException(new Error(error.message), {
+                tags: { op: 'subscribeToEvents.realtimeRefetch' },
+              })
+            }
             onUpdate(((data ?? []) as any[]).map(toEvent))
           }))
-      .subscribe()
+      .subscribe((status, err) => {
+        // Ошибки самого realtime-канала (CHANNEL_ERROR/TIMED_OUT) не ловятся
+        // обычным try/catch вокруг подписки — нужен колбэк .subscribe() (см. ТЗ,
+        // аналогичная логика понадобится для usePresence, когда там появится
+        // реальный Supabase-канал вместо текущего мока).
+        if (status === "CHANNEL_ERROR" || status === "TIMED_OUT") {
+          Sentry.captureException(err ?? new Error(`road_events channel status: ${status}`), {
+            tags: { op: 'subscribeToEvents.channel', status },
+          })
+        }
+      })
     return () => { void supabase.removeChannel(channel) }
   },
 }

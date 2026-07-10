@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { GPSEngine } from '../engines/gps'
+import { Sentry } from '../lib/sentry'
 import type { GPSState, GPSPosition } from '../types/geo'
 
 const INITIAL_STATE: GPSState = { position: null, status: 'idle', error: null }
@@ -22,9 +23,18 @@ export function useGPS(): GPSState & { start: () => void; stop: () => void } {
         if (!mountedRef.current) return
         setState({ position: pos, status: 'active', error: null })
       },
-      onError: (status, msg) => {
+      onError: (status, msg, code) => {
         if (!mountedRef.current) return
         setState((s) => ({ ...s, status, error: msg }))
+        // 'lost' (POSITION_UNAVAILABLE) — обычный кейс на въезде в тоннель/паркинг,
+        // не шлём в Sentry как ошибку, чтобы не засорять — остальное репортим.
+        if (status !== 'lost') {
+          Sentry.captureMessage(`GPS error: ${msg}`, {
+            level: 'warning',
+            tags: { op: 'useGPS', gpsStatus: status },
+            extra: { geolocationErrorCode: code },
+          })
+        }
       },
       minDistanceM: 2, minIntervalMs: 1_000,
     })

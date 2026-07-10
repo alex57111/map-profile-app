@@ -1,7 +1,7 @@
 import type { GPSPosition, GPSStatus } from '../types/geo'
 
 export type GPSCallback = (pos: GPSPosition) => void
-export type GPSErrorCallback = (status: GPSStatus, msg: string) => void
+export type GPSErrorCallback = (status: GPSStatus, msg: string, code?: number) => void
 
 interface GPSEngineOptions {
   onPosition: GPSCallback
@@ -122,9 +122,9 @@ export class GPSEngine {
 
   private handleGeoError(err: GeolocationPositionError): void {
     switch (err.code) {
-      case err.PERMISSION_DENIED: this.opts.onError('denied', 'Доступ к геолокации запрещён'); break
-      case err.POSITION_UNAVAILABLE: this.opts.onError('lost', 'Сигнал GPS потерян'); break
-      case err.TIMEOUT: this.opts.onError('error', 'Превышено время ожидания GPS'); break
+      case err.PERMISSION_DENIED: this.opts.onError('denied', 'Доступ к геолокации запрещён', err.code); break
+      case err.POSITION_UNAVAILABLE: this.opts.onError('lost', 'Сигнал GPS потерян', err.code); break
+      case err.TIMEOUT: this.opts.onError('error', 'Превышено время ожидания GPS', err.code); break
     }
   }
 }

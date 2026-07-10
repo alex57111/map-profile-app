@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useAdapters } from './useAdapters'
+import { useAuth } from './useAuth'
+import { Sentry } from '../lib/sentry'
 import type { RoadEvent, CreateEventPayload } from '../types/event'
 import type { Coords } from '../types/geo'
 
@@ -7,6 +9,7 @@ export interface MapBounds { minLat: number; maxLat: number; minLng: number; max
 
 export function useMapEvents(_bounds: MapBounds | null) {
   const { events: eventsAdapter } = useAdapters()
+  const { status: authStatus } = useAuth()
   const [events, setEvents] = useState<RoadEvent[]>([])
   const [creating, setCreating] = useState(false)
   const unsubRef = useRef<(() => void) | null>(null)
@@ -26,16 +29,29 @@ export function useMapEvents(_bounds: MapBounds | null) {
     try {
       await eventsAdapter.createEvent(payload)
     } catch (e) {
-      // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
-      alert("DEBUG createEvent error: " + (e instanceof Error ? e.message : String(e)))
+      Sentry.captureException(e, {
+        tags: { op: 'useMapEvents.createEvent', authStatus },
+        extra: {
+          type: payload.type,
+          lat: payload.lat, lng: payload.lng, // округляются централизованно в beforeSend
+        },
+      })
       throw e
     } finally {
       setCreating(false)
     }
-  }, [eventsAdapter])
+  }, [eventsAdapter, authStatus])
 
   const voteOnEvent = useCallback(async (eventId: string, vote: 'yes' | 'no'): Promise<void> => {
-    await eventsAdapter.voteOnEvent(eventId, vote)
+    try {
+      await eventsAdapter.voteOnEvent(eventId, vote)
+    } catch (e) {
+      Sentry.captureException(e, {
+        tags: { op: 'useMapEvents.voteOnEvent' },
+        extra: { eventId, vote },
+      })
+      throw e
+    }
   }, [eventsAdapter])
 
   return { events, createEvent, voteOnEvent, creating }

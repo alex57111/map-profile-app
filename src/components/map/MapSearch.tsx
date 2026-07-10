@@ -2,6 +2,7 @@ import { useState, useRef, useCallback } from 'react'
 import type { CSSProperties } from 'react'
 import { COLORS, FONT, SPACING, RADIUS, SAFE_TOP } from '../ui/tokens'
 import { geocodeForward } from '../../hooks/useGeocoder'
+import { Sentry } from '../../lib/sentry'
 import type { Coords } from '../../types/geo'
 
 interface SearchResult {
@@ -32,7 +33,8 @@ export function MapSearch({ onSelect }: Props) {
       try {
         const found = await geocodeForward(text)
         setResults(found.slice(0, 5))
-      } catch {
+      } catch (e) {
+        Sentry.captureException(e, { tags: { op: 'MapSearch.handleInput' }, extra: { queryLength: text.length } })
         setResults([])
       } finally {
         setLoading(false)

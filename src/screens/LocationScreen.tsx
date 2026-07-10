@@ -23,8 +23,7 @@ import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
 import type { AuthState } from "../types/user"
-// TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать вместе с debug-баннером ниже
-import { DebugBanner } from "../components/DebugBanner"
+import { Sentry } from "../lib/sentry"
 
 const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
 
@@ -119,20 +118,26 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
         zoneLimitKmh: options?.zoneLimitKmh,
       })
     } catch (e) {
-      // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой.
-      // useMapEvents.createEvent уже показывает alert и рестрасывает ошибку —
-      // здесь просто не даём sheet закрыться, чтобы было видно, что упало.
+      // useMapEvents.createEvent уже отправляет ошибку в Sentry и ре-бросает её —
+      // здесь просто не даём sheet закрыться, чтобы пользователь видел, что
+      // создание не удалось, и мог повторить попытку.
       return
     }
     setAddSheetOpen(false); setPendingCoords(null)
   }, [createEvent])
 
   const handleVote = useCallback(async (eventId: string, vote: "yes" | "no") => {
-    await voteOnEvent(eventId, vote)
-    // Раньше здесь вручную инкрементился счётчик в selectedEvent — больше
-    // не нужно: selectedEvent теперь деривация от combinedEvents, и как
-    // только useMapEvents перефетчит events по postgres_changes, актуальный
-    // счётчик (или отсутствие события, если оно удалено) подтянется сам.
+    try {
+      await voteOnEvent(eventId, vote)
+      // Раньше здесь вручную инкрементился счётчик в selectedEvent — больше
+      // не нужно: selectedEvent теперь деривация от combinedEvents, и как
+      // только useMapEvents перефетчит events по postgres_changes, актуальный
+      // счётчик (или отсутствие события, если оно удалено) подтянется сам.
+    } catch (e) {
+      // useMapEvents.voteOnEvent уже отправляет ошибку в Sentry — здесь только
+      // не даём необработанному rejection всплыть выше молча.
+      Sentry.captureException(e, { tags: { op: 'handleVote' }, extra: { eventId, vote } })
+    }
   }, [voteOnEvent])
 
   const handleFABPress = useCallback(() => {
@@ -184,9 +189,6 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
 
   return (
     <div style={wrapStyle}>
-      {/* TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать после решения проблемы */}
-      <DebugBanner />
-
       <LeafletMap
         position={gps.position}
         events={combinedEvents}

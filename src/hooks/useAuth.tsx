@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import { useAdapters } from './useAdapters'
+import { Sentry } from '../lib/sentry'
 import type { AuthState, UserProfile } from '../types/user'
 
 type AuthContextValue = AuthState & {
@@ -27,14 +28,34 @@ export function AuthProvider({ children }: Props) {
       if (cancelled) return
       if (user) setState({ status: 'authenticated', user })
       else auth.signInAnonymous().then((u) => { if (!cancelled) setState({ status: 'authenticated', user: u }) })
-        .catch(() => { if (!cancelled) setState({ status: 'unauthenticated' }) })
+        .catch((e) => {
+          if (!cancelled) setState({ status: 'unauthenticated' })
+          Sentry.captureException(e, { tags: { op: 'AuthProvider', stage: 'anonymous_sign_in' } })
+        })
+    }).catch((e) => {
+      if (!cancelled) setState({ status: 'unauthenticated' })
+      Sentry.captureException(e, { tags: { op: 'AuthProvider', stage: 'get_current_user' } })
     })
     return () => { cancelled = true }
   }, [auth])
 
-  const signIn = async () => { const user = await auth.signInAnonymous(); setState({ status: 'authenticated', user }) }
+  const signIn = async () => {
+    try {
+      const user = await auth.signInAnonymous()
+      setState({ status: 'authenticated', user })
+    } catch (e) {
+      Sentry.captureException(e, { tags: { op: 'AuthProvider.signIn', stage: 'anonymous_sign_in' } })
+      throw e
+    }
+  }
   const updateProfile = async (data: Partial<Pick<UserProfile, 'displayName' | 'phone'>>) => {
-    const updated = await auth.updateProfile(data); setState({ status: 'authenticated', user: updated })
+    try {
+      const updated = await auth.updateProfile(data)
+      setState({ status: 'authenticated', user: updated })
+    } catch (e) {
+      Sentry.captureException(e, { tags: { op: 'AuthProvider.updateProfile' } })
+      throw e
+    }
   }
 
   return (

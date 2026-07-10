@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from "react"
 import type { Coords } from "../types/geo"
 import type { RoadEvent } from "../types/event"
+import { Sentry } from "../lib/sentry"
 
 // Кэш запросов: ключ bbox (округлённый до ~2 знаков, как рекомендовано в ТЗ) → зоны
 const cache = new Map<string, { zones: RoadEvent[]; ts: number }>()
@@ -155,7 +156,14 @@ export function useOsmSpeedZones(mapCenter: Coords | null): RoadEvent[] {
         cache.set(key, { zones: result, ts: Date.now() })
         setZones(result)
       })
-      .catch(() => {}) // тихо игнорируем ошибки сети — отсутствие зон не должно ломать экран
+      .catch((e) => {
+        // Отсутствие зон не должно ломать экран, но репортим — как и в
+        // useOsmCameras, это может сигналить о проблемах с Overpass API.
+        Sentry.captureException(e, {
+          tags: { op: 'useOsmSpeedZones' },
+          extra: { lat: mapCenter.lat, lng: mapCenter.lng, radiusM: FETCH_RADIUS_M },
+        })
+      })
       .finally(() => { loadingRef.current = false })
   }, [mapCenter?.lat, mapCenter?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
 

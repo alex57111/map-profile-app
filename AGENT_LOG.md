@@ -1,9 +1,10 @@
 # Лог работы над ТЗ: навигация + антирадар
 
 ## Статус
-Текущий блок: Блок 4 выполнен + ряд точечных фиксов после (auth, realtime,
-голосование) — см. "История изменений" внизу для полного списка заходов
-Последнее обновление: 2026-07-10 (заход 10)
+Текущий блок: Sentry-мониторинг + автообновляемый BLOKNOTERROR.md — код
+готов и собирается, но заблокирован на живом Sentry-проекте/секретах Alex
+(см. заход 14 в "История изменений" внизу)
+Последнее обновление: 2026-07-11 (заход 14)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -578,6 +579,69 @@ TEMP DIAG, удалить вместе с импортом в LocationScreen.tsx
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-11 (заход 14) — Sentry-мониторинг + автообновляемый BLOKNOTERROR.md
+- Прочитан BLOKNOTERROR.md ТЗ (журнал ошибок + Sentry) и правки от Аллл
+  (ErrorBoundary, полный аудит catch, остальные хуки, sampleRate, DSN-проверка,
+  beforeSend) — реализовано всё целиком, включая п.6.5.
+- Установлен @sentry/react (deps) и @sentry/cli (devDeps, --legacy-peer-deps).
+- Новый src/lib/sentry.ts: initSentry() (dsn/environment/enabled по наличию
+  DSN, tracesSampleRate 0.2, sampleRate 1.0 явно), beforeSend с
+  roundCoordsDeep() — единая точка округления координат по имени ключа
+  (lat/lng/latitude/longitude и т.п.) в extra/contexts перед отправкой.
+  console.error при отсутствии VITE_SENTRY_DSN в production-сборке.
+- main.tsx: initSentry() до рендера, <App/> обёрнут в Sentry.ErrorBoundary
+  с русскоязычным fallback (кнопка "Перезагрузить") вместо белого экрана.
+- DebugBanner.tsx удалён полностью (файл + импорт/рендер в LocationScreen.tsx).
+  Заодно убраны мёртвые DEBUG_VITE_USE_SUPABASE_RAW/DEBUG_USE_SUPABASE
+  экспорты из adapters/index.ts (использовались только баннером).
+- Аудит `grep -rn "catch"` по src/ — закрыты ВСЕ найденные точки, не только
+  7 из таблицы 3.3: useMapEvents (createEvent через alert() → Sentry;
+  voteOnEvent — раньше вообще без catch, теперь есть), useRoute
+  (buildRoute/checkDeviation/updateProgress — fetchRoutes принимает tag
+  вызывающей операции), useGPS (GPSErrorCallback дополнен опциональным
+  code — GeolocationPositionError.code, сигнатура обратно совместима),
+  useOsmCameras/useOsmSpeedZones (тихие catch(()=>{}) → captureException),
+  useAuth.tsx/AuthProvider (getCurrentUser раньше вообще не ловил reject —
+  бы завис в 'loading' навсегда; signIn/updateProfile тоже без catch —
+  добавлено), useSpeedLimit, useGeocoder.ts + дублирующий catch в
+  MapSearch.tsx (query не логируется целиком — только queryLength,
+  приватность), supabase/events.ts (alert()-и заменены на Sentry +
+  добавлен колбэк .subscribe((status,err)=>...) на CHANNEL_ERROR/TIMED_OUT
+  канала, которого раньше не было вообще), useEventsAhead и
+  useAverageSpeedZone обёрнуты защитным try/catch (доп. к верхнему
+  ErrorBoundary — эти хуки без него тоже не должны ронять весь экран).
+- usePresence.ts: РАСХОЖДЕНИЕ С ТЗ — п.6.5.2 просит обернуть ошибки
+  realtime-колбэков presence, но в коде это по-прежнему мок-заглушка
+  (захардкоженный массив), реального Supabase-канала нет. Обернуть нечего —
+  оставлен коммент с паттерном на будущее (тот же, что в
+  subscribeToEvents.channel).
+- Sourcemaps: build.sourcemap=true в vite.config.ts, новый
+  scripts/upload-sourcemaps.mjs (inject+upload через @sentry/cli, удаляет
+  .map из dist после успешной загрузки — не отдаём их публично) и npm-скрипт
+  `build:cf` = `vite build && node scripts/upload-sourcemaps.mjs`. Скрипт
+  молча пропускает загрузку, если SENTRY_AUTH_TOKEN/ORG/PROJECT не заданы —
+  обычный `npm run build` (без секретов) остаётся зелёным.
+- .github/workflows/error-log.yml: cron 0 3 * * * + workflow_dispatch,
+  запускает scripts/update-bloknoterror.mjs (Sentry REST API — unresolved +
+  resolved issues), коммитит BLOKNOTERROR.md от github-actions[bot] только
+  если файл реально изменился.
+- BLOKNOTERROR.md создан в корне репозитория (плейсхолдер — "Action ещё не
+  запускался"), .env.example дополнен примером VITE_SENTRY_DSN с пометкой
+  про Cloudflare Build command (по аналогии с багом Supabase-переменных).
+- npx tsc --noEmit + npm run build + npm run build:cf (без секретов,
+  убедился что sourcemap-шаг корректно молча пропускается) — всё чисто.
+- ЗАБЛОКИРОВАНО без участия Alex (см. сообщение в чате): реального Sentry
+  DSN/org/project/токенов нет — код готов и собирается, но:
+  (1) VITE_SENTRY_DSN не добавлен в Cloudflare Pages Build command → в
+      бою Sentry сейчас выключен (enabled: !!dsn) до ручной правки Alex;
+  (2) секреты SENTRY_API_TOKEN/SENTRY_ORG/SENTRY_PROJECT/SENTRY_AUTH_TOKEN
+      не добавлены в GitHub/Cloudflare → workflow_dispatch отработает
+      скрипт, но упадёт на первом же запросе к Sentry API (нет данных для
+      проверки "факт обновления файла" из Definition of Done п.5);
+  (3) sourcemaps не загружались ни разу (нет SENTRY_AUTH_TOKEN).
+  Как только Alex заведёт Sentry-проект и добавит секреты — можно запустить
+  workflow_dispatch вручную и проверить реальный коммит от бота.
 
 ### 2026-07-10 (заход 13) — EventDetailSheet: блокировка повторного голоса
 - Перенесён паттерн voted-стейта из EventAheadAlert.tsx: useState(false) +

@@ -1,6 +1,7 @@
 
 import { useEffect, useRef, useState } from "react"
 import type { Coords } from "../types/geo"
+import { Sentry } from "../lib/sentry"
 
 export interface OsmCamera {
   id: string
@@ -102,7 +103,14 @@ export function useOsmCameras(mapCenter: Coords | null): OsmCamera[] {
         cache.set(key, { cameras: result, ts: Date.now() })
         setCameras(result)
       })
-      .catch(() => {}) // тихо игнорируем ошибки сети
+      .catch((e) => {
+        // Не ломаем экран из-за отсутствия камер, но репортим — это может быть
+        // признаком проблем с Overpass API, которые стоит увидеть в Sentry.
+        Sentry.captureException(e, {
+          tags: { op: 'useOsmCameras' },
+          extra: { lat: mapCenter.lat, lng: mapCenter.lng, radiusM: FETCH_RADIUS_M },
+        })
+      })
       .finally(() => { loadingRef.current = false })
   }, [mapCenter?.lat, mapCenter?.lng]) // eslint-disable-line react-hooks/exhaustive-deps
 

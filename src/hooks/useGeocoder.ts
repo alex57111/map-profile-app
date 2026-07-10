@@ -1,5 +1,6 @@
 import { useCallback, useRef } from 'react'
 import type { Coords } from '../types/geo'
+import { Sentry } from '../lib/sentry'
 
 const NOMINATIM = 'https://nominatim.openstreetmap.org'
 const HEADERS = { 'Accept-Language': 'ru,en', 'User-Agent': 'poputchik-app/1.0' }
@@ -46,7 +47,10 @@ export function useGeocoder() {
     if (timerRef.current) clearTimeout(timerRef.current)
     if (!query.trim()) { onResults([]); return }
     timerRef.current = setTimeout(() => {
-      geocodeForward(query).then(onResults).catch(() => onResults([]))
+      geocodeForward(query).then(onResults).catch((e) => {
+        Sentry.captureException(e, { tags: { op: 'useGeocoder.search' }, extra: { queryLength: query.length } })
+        onResults([])
+      })
     }, delayMs)
   }, [])
   return { search }

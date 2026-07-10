@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { GPSPosition } from '../types/geo'
+import { Sentry } from '../lib/sentry'
 
 // Кэш: geohash → limit
 const cache = new Map<string, number | null>()
@@ -43,7 +44,11 @@ async function fetchSpeedLimit(lat: number, lng: number): Promise<number | null>
 
     cache.set(key, limit)
     return limit
-  } catch {
+  } catch (e) {
+    Sentry.captureException(e, {
+      tags: { op: 'useSpeedLimit' },
+      extra: { lat, lng },
+    })
     cache.set(key, null)
     return null
   }
