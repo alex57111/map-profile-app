@@ -101,8 +101,9 @@ export const mockEventsAdapter: EventsAdapter = {
     if (vote === "yes") ev.positiveVotes++
     else ev.negativeVotes++
 
-    // Удаляем при score ≤ -3 (устойчиво к спаму)
-    if (ev.positiveVotes - ev.negativeVotes <= -3) {
+    // Порог синхронизирован с боевой SQL-функцией vote_on_event — там -1
+    // (применено вручную в Supabase, см. AGENT_LOG.md).
+    if (ev.positiveVotes - ev.negativeVotes <= -1) {
       const idx = eventsStore.findIndex((e) => e.id === eventId)
       if (idx !== -1) eventsStore.splice(idx, 1)
     }
