@@ -190,6 +190,44 @@ src/hooks/useAverageSpeedZone.ts
   отсутствие регрессий в TS-коде).
 - SQL не выполнялся (нет доступа к реальной БД).
 
+### Временная диагностика (Блок 4): событие пропадает после перезагрузки вкладки
+Статус: диагностика добавлена, ⚠️ ВРЕМЕННО — убрать после решения проблемы
+Файлы: src/lib/adapters/index.ts, src/screens/LocationScreen.tsx,
+src/hooks/useMapEvents.ts, src/lib/adapters/supabase/events.ts
+
+Симптом: после настройки Supabase (SQL выполнен, env добавлены в Cloudflare,
+деплой прошёл) добавленное событие пропадает после закрытия/открытия вкладки,
+ошибок на экране нет. Это классическое поведение mock-адаптера
+(in-memory store, сбрасывается при перезагрузке JS) — подозрение, что
+`VITE_USE_SUPABASE` не подхватывается на билде Cloudflare (Vite инлайнит
+`import.meta.env.VITE_*` во время сборки, а не в рантайме — если переменная
+была добавлена в Cloudflare Pages после последнего билда, или в неверный
+scope (Preview вместо Production), собранный бандл её не увидит).
+
+Добавлено (все правки помечены `// TEMP DIAG`, легко найти grep'ом):
+- `src/lib/adapters/index.ts` — экспортированы `DEBUG_VITE_USE_SUPABASE_RAW`
+  (сырое значение `import.meta.env.VITE_USE_SUPABASE` строкой) и
+  `DEBUG_USE_SUPABASE` (результат сравнения `=== 'true'`, то самое, что
+  реально решает mock/supabase).
+- `src/screens/LocationScreen.tsx` — мелкий баннер в левом верхнем углу
+  экрана (zeleный монотекст на чёрном), показывает оба значения. Плюс
+  `handleCreateEvent` обёрнут в try/catch — при ошибке sheet не закрывается
+  (раньше закрывался всегда, включая случай ошибки).
+- `src/hooks/useMapEvents.ts` — `createEvent` теперь ловит ошибку, показывает
+  `alert()` с текстом и перебрасывает её дальше (throw), поведение для
+  успешного пути не изменилось.
+- `src/lib/adapters/supabase/events.ts` — `subscribeToEvents` раньше
+  деструктурировал только `data` из ответа Supabase, игнорируя `error`
+  (молча проглатывал сбой, вызывая `onUpdate([])`). Теперь при наличии
+  `error` — временный `alert()` с текстом ошибки. Сама логика
+  (что происходит при отсутствии ошибки) не менялась.
+
+npm run build — успешно.
+
+**⚠️ TODO после диагностики и решения проблемы**: убрать все 4 правки
+(баннер, alert'ы, TEMP DIAG-комментарии) — grep по `TEMP DIAG` в репозитории
+покажет все места.
+
 ## Блок 3: OSM-зоны контроля средней скорости
 Статус: выполнен
 Файлы: новый src/hooks/useOsmSpeedZones.ts, src/screens/LocationScreen.tsx
@@ -242,6 +280,14 @@ src/hooks/useAverageSpeedZone.ts
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-09 (заход 6) — ВРЕМЕННАЯ диагностика supabase-режима
+- Debug-баннер в LocationScreen.tsx (VITE_USE_SUPABASE raw + boolean).
+- alert() при ошибках createEvent (useMapEvents.ts) и subscribeToEvents
+  (supabase/events.ts — там же вскрылось, что error из ответа Supabase
+  ранее вообще не проверялся).
+- Все правки помечены `// TEMP DIAG` — убрать после диагностики.
+- npm run build — успешно.
 
 ### 2026-07-09 (заход 5) — Дополнение к Блоку 4: режим "админ"
 - Добавлена profiles.is_admin, RPC become_admin(p_password) (пароль '321',
