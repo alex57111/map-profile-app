@@ -266,6 +266,8 @@ set search_path = public
 as $$
 declare
   v_is_admin boolean;
+  v_pos integer;
+  v_neg integer;
 begin
   if auth.uid() is null then
     raise exception 'Not authenticated';
@@ -283,7 +285,13 @@ begin
     if p_vote then
       update public.road_events set positive_votes = positive_votes + 1 where id = p_event_id;
     else
-      update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id;
+      update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
+        returning positive_votes, negative_votes into v_pos, v_neg;
+      -- Порог -3 — держать в синхроне с mock-адаптером (mock/events.ts:
+      -- if (ev.positiveVotes - ev.negativeVotes <= -3) удаляет событие).
+      if v_pos - v_neg <= -3 then
+        delete from public.road_events where id = p_event_id;
+      end if;
     end if;
     return;
   end if;
@@ -300,9 +308,25 @@ begin
   if p_vote then
     update public.road_events set positive_votes = positive_votes + 1 where id = p_event_id;
   else
-    update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id;
+    update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
+      returning positive_votes, negative_votes into v_pos, v_neg;
+    -- Порог -3 — держать в синхроне с mock-адаптером (см. комментарий выше).
+    if v_pos - v_neg <= -3 then
+      delete from public.road_events where id = p_event_id;
+    end if;
   end if;
 end;
 $$;
 
 grant execute on function public.vote_on_event(uuid, boolean) to authenticated;
+
+
+-- ----------------------------------------------------------------------------
+-- 7. Realtime: публикация таблицы road_events
+-- Без этой команды postgres_changes-подписка в subscribeToEvents()
+-- (src/lib/adapters/supabase/events.ts) НЕ получает события — ни insert
+-- своего события, ни изменения от других пользователей (голоса, delete
+-- при отрицательном score из п.6). Изначально причина, по которой события
+-- не появлялись в реальном времени без ручной перезагрузки вкладки.
+-- ----------------------------------------------------------------------------
+alter publication supabase_realtime add table public.road_events;
