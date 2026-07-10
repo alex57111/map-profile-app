@@ -23,7 +23,15 @@ export function useMapEvents(_bounds: MapBounds | null) {
 
   const createEvent = useCallback(async (payload: CreateEventPayload): Promise<void> => {
     setCreating(true)
-    try { await eventsAdapter.createEvent(payload) } finally { setCreating(false) }
+    try {
+      await eventsAdapter.createEvent(payload)
+    } catch (e) {
+      // TEMP DIAG (Блок 4) — убрать вместе с остальной временной диагностикой
+      alert("DEBUG createEvent error: " + (e instanceof Error ? e.message : String(e)))
+      throw e
+    } finally {
+      setCreating(false)
+    }
   }, [eventsAdapter])
 
   const voteOnEvent = useCallback(async (eventId: string, vote: 'yes' | 'no'): Promise<void> => {
