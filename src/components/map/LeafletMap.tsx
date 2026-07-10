@@ -114,6 +114,14 @@ export function LeafletMap({
   onEventClickRef.current = onEventClick
   const onRouteClickRef = useRef(onRouteClick)
   onRouteClickRef.current = onRouteClick
+  // Баг: map.on("click", ...) подключается один раз при инициализации карты
+  // и захватывал onMapClick в замыкании на тот момент — навсегда запоминал
+  // старую версию (например, authStatus === 'loading' до завершения
+  // анонимного входа), из-за чего тап по карте переставал работать после
+  // логина. Тот же паттерн ref, что уже использовался для onEventClick/
+  // onRouteClick.
+  const onMapClickRef = useRef(onMapClick)
+  onMapClickRef.current = onMapClick
 
   // Инициализация карты
   useEffect(() => {
@@ -136,7 +144,7 @@ export function LeafletMap({
       clusterGroupRef.current = cluster
     }
 
-    map.on("click", (e) => onMapClick(e.latlng.lat, e.latlng.lng))
+    map.on("click", (e) => onMapClickRef.current(e.latlng.lat, e.latlng.lng))
     map.on("moveend", () => { const c = map.getCenter(); onMapMove?.({ lat: c.lat, lng: c.lng }) })
     map.on("zoomend", () => onZoomChange?.(map.getZoom()))
     mapRef.current = map
