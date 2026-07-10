@@ -22,12 +22,20 @@ import { useOsmCameras } from "../hooks/useOsmCameras"
 import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
 import type { Coords } from "../types/geo"
+import type { AuthState } from "../types/user"
 // TEMP DIAG (Блок 4, диагностика supabase-режима) — убрать вместе с debug-баннером ниже
 import { DebugBanner } from "../components/DebugBanner"
 
 const DEFAULT_CENTER: Coords = { lat: 55.7558, lng: 37.6176 }
 
-export function LocationScreen() {
+interface LocationScreenProps {
+  // Статус анонимного входа из корневого AuthProvider (см. App.tsx) — пока
+  // не 'authenticated', создание событий заблокировано на уровне UI, чтобы
+  // не ловить "Not authenticated" от RPC в короткое окно до входа.
+  authStatus: AuthState['status']
+}
+
+export function LocationScreen({ authStatus }: LocationScreenProps) {
   const gps = useGPS()
   const mapRef = useRef<L.Map | null>(null)
 
@@ -70,10 +78,11 @@ export function LocationScreen() {
 
   const handleMapClick = useCallback((lat: number, lng: number) => {
     if (selectedEvent || selecting) return
+    if (authStatus !== 'authenticated') return // идёт анонимный вход — пока нельзя
     setPendingCoords({ lat, lng })
     setAddSheetOpen(true)
     setAutoCenter(false)
-  }, [selectedEvent, selecting])
+  }, [selectedEvent, selecting, authStatus])
 
   const handleMapMove = useCallback((center: Coords) => {
     mapCenterRef.current = center
@@ -123,11 +132,12 @@ export function LocationScreen() {
 
   const handleFABPress = useCallback(() => {
     if (selecting) return
+    if (authStatus !== 'authenticated') return // идёт анонимный вход — пока нельзя
     const center = gps.position
       ? { lat: gps.position.lat, lng: gps.position.lng }
       : mapCenterRef.current
     setPendingCoords(center); setAddSheetOpen(true)
-  }, [gps.position, selecting])
+  }, [gps.position, selecting, authStatus])
 
   const handleRecenter = useCallback(() => {
     const map = mapRef.current; if (!map) return
@@ -254,7 +264,20 @@ export function LocationScreen() {
 
       <ZoomControls zoom={zoom} minZoom={MAP_MIN_ZOOM} maxZoom={MAP_MAX_ZOOM} onZoomIn={handleZoomIn} onZoomOut={handleZoomOut} />
       <RecenterButton active={autoCenter} onRecenter={handleRecenter} />
-      {!selecting && <AddEventFAB onPress={handleFABPress} />}
+      {!selecting && authStatus === 'authenticated' && <AddEventFAB onPress={handleFABPress} />}
+      {!selecting && authStatus !== 'authenticated' && (
+        // Вход ещё не завершён (или не удался) — показываем некликабельный
+        // индикатор вместо активной кнопки создания события.
+        <div style={{
+          position: "absolute", bottom: 80, left: 16, width: 52, height: 52,
+          borderRadius: "50%", backgroundColor: "rgba(120,120,120,0.55)",
+          border: "1px solid rgba(120,120,120,0.4)", color: "#fff",
+          display: "flex", alignItems: "center", justifyContent: "center",
+          fontSize: 20, zIndex: 500, pointerEvents: "none",
+        }}>
+          {authStatus === 'loading' ? '⏳' : '🔒'}
+        </div>
+      )}
 
       <AddEventSheet
         coords={addSheetOpen ? pendingCoords : null}
