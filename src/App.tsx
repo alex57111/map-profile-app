@@ -1,6 +1,7 @@
 
 import { useState } from 'react'
 import { AdaptersProvider } from './hooks/useAdapters'
+import { AuthProvider, useAuth } from './hooks/useAuth'
 import { LocationScreen } from './screens/LocationScreen'
 import { ProfileScreen } from './screens/ProfileScreen'
 import { useSettings } from './hooks/useSettings'
@@ -11,6 +12,12 @@ type TabId = 'map' | 'profile'
 function AppContent() {
   const [tab, setTab] = useState<TabId>('map')
   const { theme } = useSettings()
+  // Единственная точка входа в auth-стейт на уровне корневого компонента —
+  // AuthProvider (см. export default App() ниже) стартует анонимный вход
+  // сразу при монтировании, независимо от того, какая вкладка открыта первой.
+  // Статус прокидывается вниз пропом, чтобы LocationScreen мог заблокировать
+  // создание события, пока идёт вход (status: 'loading').
+  const authStatus = useAuth().status
   const isDark = theme === 'dark'
   const bg = isDark ? '#0F0F0F' : '#F5F5F5'
   const cardBg = isDark ? '#1A1A1A' : '#FFFFFF'
@@ -23,7 +30,7 @@ function AppContent() {
       WebkitFontSmoothing: 'antialiased',
       transition: 'background-color 0.3s',
     }}>
-      {tab === 'map'     && <LocationScreen />}
+      {tab === 'map'     && <LocationScreen authStatus={authStatus} />}
       {tab === 'profile' && <ProfileScreen />}
 
       <nav style={{
@@ -56,5 +63,11 @@ function AppContent() {
 }
 
 export default function App() {
-  return <AdaptersProvider><AppContent /></AdaptersProvider>
+  return (
+    <AdaptersProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </AdaptersProvider>
+  )
 }
