@@ -1,0 +1,35 @@
+name: Обновление журнала ошибок (BLOKNOTERROR.md)
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update-bloknoterror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Запрос issues из Sentry и генерация BLOKNOTERROR.md
+        env:
+          SENTRY_API_TOKEN: ${{ secrets.SENTRY_API_TOKEN }}
+          SENTRY_ORG: ${{ secrets.SENTRY_ORG }}
+          SENTRY_PROJECT: ${{ secrets.SENTRY_PROJECT }}
+        run: node scripts/update-bloknoterror.mjs
+      - name: Коммит и пуш от github-actions[bot]
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- BLOKNOTERROR.md; then
+            echo "не изменился"
+          else
+            git add BLOKNOTERROR.md
+            git commit -m "chore: auto-update BLOKNOTERROR.md"
+            git push
+          fi
