@@ -1,16 +1,14 @@
 # BLOKNOTERROR.md — журнал ошибок (автообновление)
 
 > Обновляется автоматически GitHub Action `.github/workflows/error-log.yml`
-> Последнее обновление: ещё не запускался
-> Источник: Sentry project "map-profile-app" (после настройки секретов)
+> Последнее обновление: 2026-07-11 16:13 UTC
+> Источник: Sentry project "map-profile-app"
 
 ## Открытые (unresolved)
 
-_Данных пока нет — Action ещё не запускался. Нужны секреты репозитория
-`SENTRY_API_TOKEN`, `SENTRY_ORG`, `SENTRY_PROJECT` (Settings → Secrets and
-variables → Actions), после чего запусти workflow вручную (Actions →
-"Обновление журнала ошибок" → Run workflow) или дождись cron в 03:00 UTC._
+_Открытых issues нет._
 
 ## Недавно исправленные (resolved, последние ~14 дней)
 
-_Данных пока нет._
+_За последние 14 дней ничего не исправлено (или resolved issues отсутствуют)._
+
