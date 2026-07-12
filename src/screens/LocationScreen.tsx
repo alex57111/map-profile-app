@@ -48,7 +48,7 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
   const [mapCenter, setMapCenter] = useState<Coords>(DEFAULT_CENTER)
   const [zoom, setZoom] = useState(14)
 
-  const { events, createEvent, voteOnEvent, creating } = useMapEvents(null)
+  const { events, createEvent, voteOnEvent, confirmEventRelevant, creating } = useMapEvents(null)
   const { onlineUsers } = usePresence(gps.position)
   const osmZones = useOsmSpeedZones(mapCenter)
   const combinedEvents = [...events, ...osmZones]
@@ -139,6 +139,16 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
       Sentry.captureException(e, { tags: { op: 'handleVote' }, extra: { eventId, vote } })
     }
   }, [voteOnEvent])
+
+  const handleConfirmRelevant = useCallback(async (eventId: string) => {
+    try {
+      await confirmEventRelevant(eventId)
+    } catch (e) {
+      // useMapEvents.confirmEventRelevant уже отправляет ошибку в Sentry —
+      // здесь только не даём необработанному rejection всплыть выше молча.
+      Sentry.captureException(e, { tags: { op: 'handleConfirmRelevant' }, extra: { eventId } })
+    }
+  }, [confirmEventRelevant])
 
   const handleFABPress = useCallback(() => {
     if (selecting) return
@@ -296,6 +306,7 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
       <EventDetailSheet
         event={selectedEvent}
         onVote={handleVote}
+        onConfirmRelevant={handleConfirmRelevant}
         onClose={() => setSelectedEventId(null)}
       />
     </div>
