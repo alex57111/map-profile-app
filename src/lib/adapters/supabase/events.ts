@@ -11,6 +11,9 @@ function toEvent(row: any): RoadEvent {
     lat: row.lat, lng: row.lng, description: row.description,
     positiveVotes: row.positive_votes, negativeVotes: row.negative_votes,
     expiresAt: row.expires_at, createdAt: row.created_at,
+    // Блок 6: updated_at из БД (обновляется при создании и подтверждении
+    // актуальности, не при голосовании — см. supabase/schema.sql).
+    ...(row.updated_at !== null && row.updated_at !== undefined && { updatedAt: row.updated_at }),
     // Расхождение Блока 2 (см. AGENT_LOG.md) — теперь мапится из строки БД
     ...(row.heading !== null && row.heading !== undefined && { heading: row.heading }),
     ...(row.end_lat !== null && row.end_lat !== undefined && { endLat: row.end_lat }),
@@ -19,11 +22,19 @@ function toEvent(row: any): RoadEvent {
   }
 }
 
+// Блок 6: expires_at теперь nullable (NULL = не истекает, camera). Простой
+// .gt("expires_at", now) молча исключает NULL-строки (NULL > x → NULL →
+// false в WHERE) — нужен явный .or() с обеими ветками во всех местах,
+// где раньше был .gt().
+function notExpiredOrClause(): string {
+  return `expires_at.is.null,expires_at.gt.${new Date().toISOString()}`
+}
+
 export const supabaseEventsAdapter: EventsAdapter = {
   async getEventsInBounds(minLat, maxLat, minLng, maxLng): Promise<RoadEvent[]> {
     const { data } = await db.from("road_events").select("*")
       .gte("lat", minLat).lte("lat", maxLat).gte("lng", minLng).lte("lng", maxLng)
-      .gt("expires_at", new Date().toISOString()).order("created_at", { ascending: false }).limit(200)
+      .or(notExpiredOrClause()).order("created_at", { ascending: false }).limit(200)
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return ((data ?? []) as any[]).map(toEvent)
   },
@@ -42,8 +53,13 @@ export const supabaseEventsAdapter: EventsAdapter = {
     const { error } = await (db as any).rpc("vote_on_event", { p_event_id: eventId, p_vote: vote === "yes" })
     if (error) throw new Error(String(error.message))
   },
+  async confirmEventRelevant(eventId: string): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (db as any).rpc("confirm_event_relevant", { p_event_id: eventId })
+    if (error) throw new Error(String(error.message))
+  },
   subscribeToEvents(onUpdate: (events: RoadEvent[]) => void): () => void {
-    void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
+    void db.from("road_events").select("*").or(notExpiredOrClause())
       .then(({ data, error }) => {
         if (error) {
           Sentry.captureException(new Error(error.message), {
@@ -54,7 +70,7 @@ export const supabaseEventsAdapter: EventsAdapter = {
       })
     const channel = supabase.channel("public:road_events")
       .on("postgres_changes", { event: "*", schema: "public", table: "road_events" },
-        () => void db.from("road_events").select("*").gt("expires_at", new Date().toISOString())
+        () => void db.from("road_events").select("*").or(notExpiredOrClause())
           .then(({ data, error }) => {
             if (error) {
               Sentry.captureException(new Error(error.message), {
