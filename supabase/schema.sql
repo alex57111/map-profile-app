@@ -83,8 +83,18 @@ create table public.road_events (
   description     text,
   positive_votes  integer not null default 0,
   negative_votes  integer not null default 0,
-  expires_at      timestamptz not null,
+  -- Блок 6 (2026-07-11): nullable — NULL = событие не истекает. Сейчас
+  -- только type='camera' (переиспользован как "стационарная камера" из ТЗ,
+  -- отдельный тип camera_stationary не заводили, см. AGENT_LOG.md заход 16).
+  expires_at      timestamptz,
   created_at      timestamptz not null default now(),
+  -- Блок 6: обновляется при создании и при confirm_event_relevant() —
+  -- НЕ при голосовании.
+  updated_at      timestamptz not null default now(),
+  -- Блок 6: подряд идущих голосов "нет" без сброса положительным голосом —
+  -- используется для автоскрытия в vote_on_event. Внутреннее поле, в
+  -- RoadEvent-тип на фронте не входит.
+  negative_streak integer not null default 0,
   -- Направление автора (0-360, null = направление неизвестно → алерт всем)
   heading         double precision,
   -- Зона средней скорости (только type = 'speed_zone')
@@ -129,6 +139,30 @@ create table public.event_votes (
 
 alter table public.event_votes enable row level security;
 -- Политик нет намеренно — таблица закрыта для прямого доступа.
+-- UNIQUE на (event_id, user_id) уже обеспечена PRIMARY KEY — отдельный
+-- constraint для антифрода Блока 6 (п.3 ТЗ) не требуется, повторный голос
+-- одним user_id за одно событие невозможен уже с Блока 4.
+
+
+-- ----------------------------------------------------------------------------
+-- 3a. vote_rate_log (Блок 6)
+-- Rate-limit на голоса: не более 20 вызовов vote_on_event за скользящее
+-- окно 10 минут на user_id. Считать по event_votes нельзя — там одна
+-- строка на (event_id, user_id), перезаписывается через ON CONFLICT
+-- (особенно у админа), повторные попытки теряются. Здесь — отдельный
+-- append-only лог КАЖДОГО вызова, а не только уникальных голосов.
+-- ----------------------------------------------------------------------------
+create table public.vote_rate_log (
+  id         bigserial primary key,
+  user_id    uuid not null references auth.users(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+
+create index vote_rate_log_user_time_idx on public.vote_rate_log (user_id, created_at);
+
+alter table public.vote_rate_log enable row level security;
+-- Политик нет намеренно — таблица закрыта для прямого доступа, читает и
+-- пишет только SECURITY DEFINER функция ниже.
 
 
 -- ----------------------------------------------------------------------------
@@ -136,12 +170,16 @@ alter table public.event_votes enable row level security;
 -- Вызывается из createEvent() (supabase/events.ts) с параметрами
 -- p_type/p_lat/p_lng/p_description (+ p_heading/p_end_lat/p_end_lng/
 -- p_zone_limit_kmh после фикса в этом блоке).
--- TTL — CASE по типу, значения продублированы из EVENT_TYPE_CONFIG
--- (src/types/event.ts) буквально, чтобы не разойтись с фронтендом:
---   camera 180 / police 60 / accident 90 / repair 480 / danger 45 /
---   speed_zone 1440 (минуты).
+-- TTL — CASE по типу, значения синхронизированы с EVENT_TYPE_CONFIG
+-- (src/types/event.ts). Блок 6 (2026-07-11, по прямому указанию Alex —
+-- "заменить текущие на новые"): accident 180 / repair 1440 / police 120 —
+-- из ТЗ Блока 6; camera → NULL (никогда не истекает, переиспользован как
+-- camera_stationary из ТЗ); danger/speed_zone → 360 ("остальные типы",
+-- 6 часов по умолчанию из ТЗ). Старые значения (camera 180 / police 60 /
+-- accident 90 / repair 480 / danger 45 / speed_zone 1440) — см. историю в
+-- AGENT_LOG.md, заход 4.
 -- ----------------------------------------------------------------------------
-create function public.create_road_event(
+create or replace function public.create_road_event(
   p_type            text,
   p_lat             double precision,
   p_lng             double precision,
@@ -169,22 +207,25 @@ begin
   end if;
 
   -- Значения ttlMins из src/types/event.ts EVENT_TYPE_CONFIG — держать в синхроне.
+  -- NULL (camera) — событие не истекает.
   v_ttl_mins := case p_type
-    when 'camera'     then 180
-    when 'police'     then 60
-    when 'accident'   then 90
-    when 'repair'     then 480
-    when 'danger'     then 45
-    when 'speed_zone' then 1440
+    when 'camera'     then null
+    when 'police'     then 120
+    when 'accident'   then 180
+    when 'repair'     then 1440
+    when 'danger'     then 360
+    when 'speed_zone' then 360
   end;
 
   insert into public.road_events (
     author_id, type, lat, lng, description,
-    positive_votes, negative_votes, expires_at,
+    positive_votes, negative_votes, expires_at, updated_at,
     heading, end_lat, end_lng, zone_limit_kmh
   ) values (
     auth.uid(), p_type, p_lat, p_lng, p_description,
-    0, 0, now() + (v_ttl_mins || ' minutes')::interval,
+    0, 0,
+    case when v_ttl_mins is null then null else now() + (v_ttl_mins || ' minutes')::interval end,
+    now(),
     p_heading, p_end_lat, p_end_lng, p_zone_limit_kmh
   )
   returning * into v_row;
@@ -197,6 +238,57 @@ grant execute on function public.create_road_event(
   text, double precision, double precision, text,
   double precision, double precision, double precision, double precision
 ) to authenticated;
+
+
+-- ----------------------------------------------------------------------------
+-- 4a. RPC confirm_event_relevant (Блок 6)
+-- «Подтвердить, что событие всё ещё актуально»: продлевает expires_at на
+-- тот же TTL заново от текущего момента (тот же CASE по типу, что и в
+-- create_road_event — держать в синхроне), обновляет updated_at, сбрасывает
+-- negative_streak (спор считается разрешённым в пользу события).
+-- ----------------------------------------------------------------------------
+create function public.confirm_event_relevant(p_event_id uuid)
+returns public.road_events
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  v_type text;
+  v_ttl_mins integer;
+  v_row public.road_events;
+begin
+  if auth.uid() is null then
+    raise exception 'Not authenticated';
+  end if;
+
+  select type into v_type from public.road_events where id = p_event_id;
+  if v_type is null then
+    raise exception 'Event not found';
+  end if;
+
+  v_ttl_mins := case v_type
+    when 'camera'     then null
+    when 'police'     then 120
+    when 'accident'   then 180
+    when 'repair'     then 1440
+    when 'danger'     then 360
+    when 'speed_zone' then 360
+  end;
+
+  update public.road_events
+  set
+    expires_at = case when v_ttl_mins is null then null else now() + (v_ttl_mins || ' minutes')::interval end,
+    updated_at = now(),
+    negative_streak = 0
+  where id = p_event_id
+  returning * into v_row;
+
+  return v_row;
+end;
+$$;
+
+grant execute on function public.confirm_event_relevant(uuid) to authenticated;
 
 
 -- ----------------------------------------------------------------------------
@@ -213,6 +305,10 @@ grant execute on function public.create_road_event(
 -- длинную случайную строку и обязательно добавить rate-limit на вызовы
 -- become_admin (сейчас его нет — ничего не мешает перебирать пароль
 -- скриптом через анонимный ключ).
+--
+-- Блок 6 (2026-07-11): по прямому указанию Alex вынос пароля в секрет
+-- ПОКА НЕ ДЕЛАЕТСЯ — п.4 ТЗ Блока 6 отложен как есть (см. AGENT_LOG.md,
+-- заход 16). Технический долг остаётся открытым.
 -- ----------------------------------------------------------------------------
 create function public.become_admin(p_password text)
 returns void
@@ -254,8 +350,20 @@ grant execute on function public.become_admin(text) to authenticated;
 -- перезаписывается (ON CONFLICT DO UPDATE) — таблица хранит последний голос
 -- для справки, но НЕ отражает реальное количество голосов админа, т.к.
 -- счётчик в road_events растёт при каждом вызове независимо от конфликта.
+--
+-- Блок 6 (2026-07-11): два изменения по прямому указанию Alex.
+-- (1) Rate-limit — не более 20 вызовов за 10 минут на user_id (см.
+--     vote_rate_log выше), проверяется и логируется в самом начале, до
+--     остальной логики и независимо от её исхода.
+-- (2) Старый score-based DELETE (positive_votes - negative_votes <= -1,
+--     см. историю в AGENT_LOG.md, заходы 10-12) ЗАМЕНЁН на streak-based
+--     hide: порог — 1 подряд идущий голос "нет" без положительного голоса
+--     следом (negative_streak, обнуляется любым голосом "да"). Событие
+--     больше не удаляется физически — только скрывается через
+--     expires_at в прошлое (фронт фильтрует по expires_at, см.
+--     src/lib/adapters/supabase/events.ts).
 -- ----------------------------------------------------------------------------
-create function public.vote_on_event(
+create or replace function public.vote_on_event(
   p_event_id uuid,
   p_vote     boolean
 )
@@ -266,12 +374,24 @@ set search_path = public
 as $$
 declare
   v_is_admin boolean;
-  v_pos integer;
-  v_neg integer;
+  v_recent_votes integer;
 begin
   if auth.uid() is null then
     raise exception 'Not authenticated';
   end if;
+
+  -- Rate-limit: считаем КАЖДУЮ попытку вызова (не только уникальные
+  -- голоса) — иначе повторные/дублирующие вызовы (особенно у админа,
+  -- у которого event_votes перезаписывается ON CONFLICT) не ловятся.
+  select count(*) into v_recent_votes
+  from public.vote_rate_log
+  where user_id = auth.uid() and created_at > now() - interval '10 minutes';
+
+  if v_recent_votes >= 20 then
+    raise exception 'Too many votes, try again later';
+  end if;
+
+  insert into public.vote_rate_log (user_id) values (auth.uid());
 
   select coalesce(is_admin, false) into v_is_admin
   from public.profiles where id = auth.uid();
@@ -283,17 +403,14 @@ begin
     on conflict (event_id, user_id) do update set vote = excluded.vote, created_at = now();
 
     if p_vote then
-      update public.road_events set positive_votes = positive_votes + 1 where id = p_event_id;
+      update public.road_events set positive_votes = positive_votes + 1, negative_streak = 0
+        where id = p_event_id;
     else
-      update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
-        returning positive_votes, negative_votes into v_pos, v_neg;
-      -- Порог -1 — держать в синхроне с mock-адаптером (mock/events.ts:
-      -- if (ev.positiveVotes - ev.negativeVotes <= -1) удаляет событие).
-      -- Было -3, изменено на -1 вручную в живой БД, затем синхронизировано
-      -- здесь и в mock — см. AGENT_LOG.md.
-      if v_pos - v_neg <= -1 then
-        delete from public.road_events where id = p_event_id;
-      end if;
+      update public.road_events
+        set negative_votes = negative_votes + 1, negative_streak = negative_streak + 1
+        where id = p_event_id;
+      update public.road_events set expires_at = now() - interval '1 minute'
+        where id = p_event_id and negative_streak >= 1;
     end if;
     return;
   end if;
@@ -308,14 +425,14 @@ begin
   end if;
 
   if p_vote then
-    update public.road_events set positive_votes = positive_votes + 1 where id = p_event_id;
+    update public.road_events set positive_votes = positive_votes + 1, negative_streak = 0
+      where id = p_event_id;
   else
-    update public.road_events set negative_votes = negative_votes + 1 where id = p_event_id
-      returning positive_votes, negative_votes into v_pos, v_neg;
-    -- Порог -1 — держать в синхроне с mock-адаптером (см. комментарий выше).
-    if v_pos - v_neg <= -1 then
-      delete from public.road_events where id = p_event_id;
-    end if;
+    update public.road_events
+      set negative_votes = negative_votes + 1, negative_streak = negative_streak + 1
+      where id = p_event_id;
+    update public.road_events set expires_at = now() - interval '1 minute'
+      where id = p_event_id and negative_streak >= 1;
   end if;
 end;
 $$;
