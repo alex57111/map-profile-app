@@ -4,11 +4,13 @@
 Текущий блок: Sentry-мониторинг + автообновляемый BLOKNOTERROR.md — код
 готов и собирается, но заблокирован на живом Sentry-проекте/секретах Alex
 (см. заход 14 в "История изменений" внизу).
-Параллельно: Блок №6 (TTL событий + антифрод + admin-пароль) — сделан только
-подготовительный обзор состояния (заход 15), кодирование не начато —
-найдено несколько расхождений ТЗ с текущим кодом, ждём уточнений Alex
-(см. заход 15).
-Последнее обновление: 2026-07-11 (заход 15)
+Параллельно: Блок №6 (TTL событий + антифрод + admin-пароль) — код написан
+и выполнен (заход 16): TTL/updated_at/confirm_event_relevant/rate-limit/
+streak-hide готовы и заведены во фронт, SQL НЕ выполнялся на живой БД —
+Alex применяет supabase/migrations/0001_block6_ttl_antifraud.sql вручную в
+Supabase SQL Editor. Admin-пароль (п.4 ТЗ) сознательно отложен — оставлен
+как есть по прямому указанию Alex.
+Последнее обновление: 2026-07-11 (заход 16)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -583,6 +585,94 @@ TEMP DIAG, удалить вместе с импортом в LocationScreen.tsx
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-11 (заход 16) — Блок №6 выполнен: TTL + updated_at + антифрод
+Ответы Alex на развилки из захода 15: (1) TTL — заменить текущие значения
+на новые из ТЗ; (2) автоскрытие — заменить старую score-based логику на
+новую, порог сделать равным 1 (а не 3, как в ТЗ); (3) admin-пароль — пока
+оставить как есть на стороне Supabase.
+
+**Типы/TTL (types/event.ts + schema.sql create_road_event/confirm_event_relevant):**
+- Новый отдельный тип `camera_stationary` НЕ заводился (по итогу решения
+  из захода 15, т.к. Alex ответил только по числам, не по структуре типов) —
+  вместо этого существующий `camera` переиспользован как "стационарная
+  камера": ttlMins → null (никогда не истекает). Явно зафиксировано в
+  комментариях schema.sql/event.ts как принятое решение агента — если
+  Alex имел в виду другое (отдельный новый тип), легко откатить точечно.
+- EVENT_TYPE_CONFIG: accident 90→180, repair 480→1440, police 60→120,
+  camera 180→null, danger 45→360, speed_zone 1440→360 (danger/speed_zone —
+  "остальные типы, 6 часов по умолчанию" из ТЗ).
+- RoadEvent.expiresAt: string → string | null. RoadEvent.updatedAt?: string
+  — новое опциональное поле (не ломает useOsmSpeedZones.ts, который его не
+  заполняет для синтетических OSM-зон).
+
+**updated_at (schema.sql + supabase/events.ts toEvent + EventDetailSheet.tsx):**
+- Новая колонка road_events.updated_at, выставляется в create_road_event()
+  и confirm_event_relevant() — НЕ в vote_on_event (голос не считается
+  "обновлением" события).
+- EventDetailSheet.tsx: formatUpdatedAt() — «Обновлено в ЧЧ:ММ» если
+  сегодня, «Обновлено ДД.ММ в ЧЧ:ММ» если нет (локальное время браузера,
+  toLocaleTimeString/toLocaleDateString('ru-RU')).
+
+**RPC confirm_event_relevant («Ещё актуально»):**
+- Новый RPC — продлевает expires_at на тот же TTL от текущего момента
+  (тот же CASE по типу, что в create_road_event — держать в синхроне при
+  правках), обновляет updated_at, сбрасывает negative_streak.
+- Прокинут по всей цепочке: interface.ts (EventsAdapter.confirmEventRelevant) →
+  mock/events.ts и supabase/events.ts (реализации) → useMapEvents.ts
+  (confirmEventRelevant с Sentry.captureException по образцу voteOnEvent) →
+  LocationScreen.tsx (handleConfirmRelevant) → EventDetailSheet.tsx (новая
+  кнопка "🔄 Ещё актуально" / "✅ Подтверждено" под кнопками голосования,
+  блокируется после нажатия по образцу voted-стейта).
+
+**Антифрод на голосованиях (schema.sql vote_on_event):**
+- UNIQUE(event_id, user_id) — не добавлялась, уже была PRIMARY KEY на
+  event_votes с Блока 4, зафиксировано комментарием.
+- Rate-limit: новая таблица vote_rate_log (append-only, id/user_id/
+  created_at + индекс по (user_id, created_at)) — журналирует КАЖДЫЙ вызов
+  vote_on_event (не только уникальные голоса, иначе повторные попытки
+  админа, у которого event_votes перезаписывается ON CONFLICT, не ловились
+  бы). Порог — 20 вызовов / 10 минут на user_id, проверяется в самом
+  начале функции, до остальной логики.
+- Автоскрытие: старый score-based DELETE (positive_votes - negative_votes
+  <= -1, заходы 10-12) ПОЛНОСТЬЮ заменён на новую логику — колонка
+  road_events.negative_streak (подряд идущих голосов "нет", обнуляется
+  любым "да"), при negative_streak >= 1 (по решению Alex, не 3 как в ТЗ)
+  событие скрывается через expires_at = now() - 1 минута, БЕЗ физического
+  DELETE. Применено в обеих ветках (админ/обычный пользователь), в
+  schema.sql и синхронно в mock/events.ts (MockRoadEvent.negativeStreak).
+
+**Фильтрация на фронте (supabase/events.ts, mock/events.ts):**
+- Три места с `.gt("expires_at", now)` в supabase/events.ts (getEventsInBounds
+  + 2 вызова в subscribeToEvents) переписаны на `.or("expires_at.is.null,
+  expires_at.gt.<iso>")` — иначе NULL-строки (camera) молча выпадали бы
+  из выборки (NULL > x → NULL → false в WHERE).
+- mock/events.ts activeEvents(): аналогичный null-check.
+
+**Файлы:**
+- SQL: supabase/schema.sql (точечные правки — road_events/event_votes/
+  vote_rate_log/create_road_event/confirm_event_relevant/vote_on_event;
+  become_admin не менялся, только добавлен комментарий про решение Alex),
+  новый supabase/migrations/0001_block6_ttl_antifraud.sql (инкрементальная
+  версия тех же изменений для применения на живой БД — schema.sql остаётся
+  источником истины для чистой установки, миграция для наката поверх).
+- TS: src/types/event.ts, src/lib/adapters/interface.ts,
+  src/lib/adapters/mock/events.ts, src/lib/adapters/supabase/events.ts,
+  src/hooks/useMapEvents.ts, src/screens/LocationScreen.tsx,
+  src/components/map/EventDetailSheet.tsx.
+- npx tsc --noEmit + npm run build — оба чистые, ошибок нет.
+
+**Осталось вручную (Alex):**
+1. Применить supabase/migrations/0001_block6_ttl_antifraud.sql в Supabase
+   SQL Editor на живой БД (SQL агентом не выполнялся — нет прямого доступа
+   к боевой БД, как и во всех предыдущих блоках).
+2. п.4 ТЗ (admin-пароль в env) НЕ реализован — сознательно отложен по
+   прямому указанию Alex, технический долг остаётся открытым.
+3. Стоит перепроверить на реальных данных: негативный streak=1 — довольно
+   агрессивный порог (событие скрывается уже от первого "нет"-голоса без
+   спора), это прямое указание Alex, но если на практике окажется, что
+   легитимные события слишком часто скрываются одним недобросовестным
+   голосом — есть смысл вернуться к обсуждению порога.
 
 ### 2026-07-11 (заход 15) — Подготовительный шаг к Блоку №6 (TTL + антифрод + admin-пароль)
 - Прочитан ТЗ-Блок-6 (TTL событий, updated_at/«ещё актуально», антифрод на
