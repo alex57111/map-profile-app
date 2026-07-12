@@ -54,7 +54,20 @@ export function useMapEvents(_bounds: MapBounds | null) {
     }
   }, [eventsAdapter])
 
-  return { events, createEvent, voteOnEvent, creating }
+  // Блок 6: «Подтвердить, что событие всё ещё актуально» — продлевает TTL.
+  const confirmEventRelevant = useCallback(async (eventId: string): Promise<void> => {
+    try {
+      await eventsAdapter.confirmEventRelevant(eventId)
+    } catch (e) {
+      Sentry.captureException(e, {
+        tags: { op: 'useMapEvents.confirmEventRelevant' },
+        extra: { eventId },
+      })
+      throw e
+    }
+  }, [eventsAdapter])
+
+  return { events, createEvent, voteOnEvent, confirmEventRelevant, creating }
 }
 
 export function boundsFromCenter(center: Coords, radiusKm = 5): MapBounds {
