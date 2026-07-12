@@ -13,6 +13,8 @@ export interface EventsAdapter {
   getEventsInBounds(minLat: number, maxLat: number, minLng: number, maxLng: number): Promise<RoadEvent[]>
   createEvent(payload: CreateEventPayload): Promise<RoadEvent>
   voteOnEvent(eventId: string, vote: VoteValue): Promise<void>
+  // Блок 6: «Подтвердить, что событие всё ещё актуально» — продлевает TTL.
+  confirmEventRelevant(eventId: string): Promise<void>
   subscribeToEvents(onUpdate: (events: RoadEvent[]) => void): () => void
 }
 
