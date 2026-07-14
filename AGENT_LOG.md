@@ -4,13 +4,15 @@
 Текущий блок: Sentry-мониторинг + автообновляемый BLOKNOTERROR.md — код
 готов и собирается, но заблокирован на живом Sentry-проекте/секретах Alex
 (см. заход 14 в "История изменений" внизу).
-Параллельно: Блок №6 (TTL событий + антифрод + admin-пароль) — код написан
-и выполнен (заход 16): TTL/updated_at/confirm_event_relevant/rate-limit/
-streak-hide готовы и заведены во фронт, SQL НЕ выполнялся на живой БД —
-Alex применяет supabase/migrations/0001_block6_ttl_antifraud.sql вручную в
-Supabase SQL Editor. Admin-пароль (п.4 ТЗ) сознательно отложен — оставлен
-как есть по прямому указанию Alex.
-Последнее обновление: 2026-07-11 (заход 16)
+Параллельно: Блок №6 (TTL событий + антифрод + admin-пароль) — весь код
+написан (заходы 16-17), на живой БД НЕ выполнялся ни один из SQL-файлов —
+Alex применяет вручную в Supabase SQL Editor по порядку:
+supabase/migrations/0001_block6_ttl_antifraud.sql, затем
+supabase/migrations/0002_block6_admin_password_hash.sql (см. заход 17 —
+там же инструкция, каким SQL задать сам пароль). Блок №6 по коду закрыт
+полностью, ждём применения миграций и обратной связи по порогу
+negative_streak=1 (см. заход 16).
+Последнее обновление: 2026-07-13 (заход 17)
 
 ## Правила работы (соблюдать всегда)
 - Не переписывать файлы целиком — только точечные правки (patch/точечные замены)
@@ -585,6 +587,77 @@ TEMP DIAG, удалить вместе с импортом в LocationScreen.tsx
 ## История изменений
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
+
+### 2026-07-13 (заход 17) — Блок №6, п.4 (добивание): вынос admin-пароля из кода
+Перед началом сверился с реальным кодом (не с прошлыми описаниями) —
+supabase/schema.sql, become_admin(), 0001_block6_ttl_antifraud.sql: пароль
+'321' действительно захардкожен как строковое сравнение внутри
+become_admin(), никаких промежуточных изменений с захода 16 не было.
+Также проверил фронтенд: прямого вызова become_admin/RPC с этим именем в
+src/**/*.ts(x) НЕ нашлось (grep пустой) — значит, эта фича вызывается не
+из UI приложения, а вручную (Alex дёргает RPC напрямую, например через
+Supabase SQL Editor/REST). Сигнатуру RPC (p_password text) не менял в
+любом случае — минимизирует риск, даже если вызов где-то есть, но не
+пойман grep'ом.
+
+**Архитектурное уточнение от Alex** (see заход 15/16): become_admin —
+Postgres RPC, не Cloudflare Pages Function, Cloudflare env var физически
+недостижима из plpgsql. Выбран вариант (а) из уточнения Alex — bcrypt-хэш
+в отдельной закрытой таблице `admin_config` (id=1 singleton, RLS enabled
+без политик — доступна только вручную через SQL Editor и SECURITY DEFINER
+функциям, тот же паттерн, что и event_votes/vote_rate_log).
+
+**Реализация (supabase/schema.sql, точечная правка, CREATE OR REPLACE,
+остальные функции не трогал):**
+- `create extension if not exists pgcrypto;` — нужен для `crypt()`/
+  `gen_salt('bf')` (bcrypt), сравнение пароля больше не в открытом виде.
+- Новая таблица `admin_config (id integer primary key default 1,
+  password_hash text not null, updated_at timestamptz, check id=1)`.
+- `become_admin(p_password text)` переписан: вместо
+  `p_password is distinct from '321'` — читает `password_hash` из
+  `admin_config where id=1`, сравнивает через
+  `crypt(p_password, v_hash) is distinct from v_hash`. Если
+  `admin_config` пустая (Alex ещё не задал пароль) — `v_hash is null` →
+  функция отклоняет любой пароль. Это осознанное safe-default поведение,
+  а не баг: пока пароль не задан вручную — стать админом нельзя вообще
+  никому, что строго безопаснее старого поведения с '321'.
+- Пароль '321' в открытом виде теперь нигде не хранится — ни в коде, ни
+  в БД.
+
+**Новый файл миграции** (точечная правка поверх 0001, порядок применения
+важен): `supabase/migrations/0002_block6_admin_password_hash.sql` —
+идемпотентный (`create table if not exists`, `create extension if not
+exists`, `create or replace function`), содержит те же 3 изменения плюс
+закомментированный ШАГ 2 — шаблон INSERT для самостоятельной установки
+пароля Alex'ом (хэш пароля НЕ генерировался мной и нигде не выводился —
+только шаблон с плейсхолдером `'ВАШ_НОВЫЙ_ПАРОЛЬ_СЮДА'`, хэширует сам
+Postgres на стороне Alex).
+
+**Проверка фронта:** `npx tsc --noEmit` и `npm run build` — чистые
+(SQL-only изменение, TS-файлы не менялись, сборка не могла сломаться, но
+проверил по правилам процесса).
+
+**Осталось вручную Alex — по порядку, в Supabase SQL Editor:**
+1. Если ещё не применена — сначала `0001_block6_ttl_antifraud.sql`
+   (TTL/updated_at/антифрод, заход 16 — без неё confirm_event_relevant/
+   negative_streak не будут работать).
+2. Затем `0002_block6_admin_password_hash.sql` целиком — это создаст
+   admin_config и обновит become_admin(). После этого шага become_admin
+   будет отклонять ВСЕ пароли (admin_config ещё пустая) — это ожидаемо,
+   не ошибка.
+3. Отдельно, своим паролём — выполнить в SQL Editor (пример-шаблон,
+   заменить плейсхолдер на реальный пароль перед запуском):
+   ```sql
+   insert into public.admin_config (id, password_hash)
+   values (1, crypt('ВАШ_НОВЫЙ_ПАРОЛЬ_СЮДА', gen_salt('bf')))
+   on conflict (id) do update
+     set password_hash = excluded.password_hash, updated_at = now();
+   ```
+   Чтобы сменить пароль позже — тот же запрос повторно с новым паролём.
+4. Проверить, что become_admin работает: вызвать RPC с новым паролём
+   (например через SQL `select * from become_admin('ваш_пароль')`,
+   выполнив это от имени authenticated-пользователя, либо через клиент)
+   и убедиться, что profiles.is_admin проставился.
 
 ### 2026-07-11 (заход 16) — Блок №6 выполнен: TTL + updated_at + антифрод
 Ответы Alex на развилки из захода 15: (1) TTL — заменить текущие значения
