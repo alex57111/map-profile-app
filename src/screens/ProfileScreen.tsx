@@ -13,6 +13,13 @@ export function ProfileScreen() {
   const { theme, lang } = useSettings()
   const [editing, setEditing] = useState(false)
   const [name, setName] = useState('')
+  // Вход в админ-режим (Блок 6, become_admin RPC через AuthAdapter) —
+  // простой локальный флаг, пароль нигде не сохраняется кроме самого
+  // запроса (см. handleBecomeAdmin ниже).
+  const [adminPassword, setAdminPassword] = useState('')
+  const [isAdmin, setIsAdmin] = useState(false)
+  const [adminError, setAdminError] = useState<string | null>(null)
+  const [adminLoading, setAdminLoading] = useState(false)
 
   const user = auth.status === 'authenticated' ? auth.user : null
   const isDark = theme === 'dark'
@@ -27,6 +34,28 @@ export function ProfileScreen() {
     if (!name.trim()) return
     await auth.updateProfile({ displayName: name.trim() })
     setEditing(false)
+  }
+
+  async function handleBecomeAdmin() {
+    if (!adminPassword || adminLoading) return
+    setAdminLoading(true)
+    setAdminError(null)
+    // Пароль читаем в локальную переменную и сразу чистим поле/стейт —
+    // нигде, кроме этого запроса, значение не сохраняется (ни в
+    // localStorage, ни в контексте auth).
+    const pwd = adminPassword
+    setAdminPassword('')
+    try {
+      await auth.becomeAdmin(pwd)
+      setIsAdmin(true)
+    } catch {
+      // become_admin() намеренно бросает одну и ту же ошибку и на
+      // "Not authenticated", и на неверный пароль (см. schema.sql) —
+      // детали не показываем, только общее сообщение.
+      setAdminError(lang === "ru" ? "Не удалось войти как админ — проверьте пароль" : "Failed to log in as admin — check the password")
+    } finally {
+      setAdminLoading(false)
+    }
   }
 
   return (
@@ -81,6 +110,38 @@ export function ProfileScreen() {
 
             <Row label={t("notif")} value={t("on")} textPrimary={textPrimary} textSecond={textSecond} border={border} />
             <Row label={t("voice")} value={t("on")} textPrimary={textPrimary} textSecond={textSecond} border={border} last />
+          </div>
+
+          <p style={{ fontSize: FONT.xs, color: textSecond, marginBottom: SPACING.xs, marginTop: SPACING.md, letterSpacing: 0.6, fontWeight: 600 }}>{lang === "ru" ? "АДМИН-РЕЖИМ" : "ADMIN MODE"}</p>
+          <div style={{ backgroundColor: cardBg, border: `1px solid ${border}`, borderRadius: RADIUS.lg, padding: SPACING.md }}>
+            {isAdmin ? (
+              <div style={{ display: "flex", alignItems: "center", gap: SPACING.xs, fontSize: FONT.base, color: textPrimary }}>
+                <span>🛡️</span>
+                <span>{lang === "ru" ? "Вы вошли как админ" : "Logged in as admin"}</span>
+              </div>
+            ) : (
+              <>
+                <div style={{ display: "flex", gap: SPACING.xs }}>
+                  <input
+                    type="password"
+                    autoComplete="off"
+                    value={adminPassword}
+                    onChange={(e) => setAdminPassword(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void handleBecomeAdmin() }}
+                    placeholder={lang === "ru" ? "Пароль админа" : "Admin password"}
+                    style={{ flex: 1, padding: "8px 10px", backgroundColor: isDark ? COLORS.bgElevated : "#EBEBEB", border: `1px solid ${border}`, borderRadius: RADIUS.sm, color: textPrimary, fontSize: FONT.base, outline: "none" }}
+                  />
+                  <button
+                    onClick={() => void handleBecomeAdmin()}
+                    disabled={adminLoading || !adminPassword}
+                    style={{ padding: "8px 14px", backgroundColor: COLORS.accent, color: "#F0F0F0", border: "none", borderRadius: RADIUS.sm, fontSize: FONT.xs, fontWeight: 600, cursor: adminLoading || !adminPassword ? "default" : "pointer", opacity: adminLoading || !adminPassword ? 0.6 : 1, whiteSpace: "nowrap" }}
+                  >
+                    {adminLoading ? (lang === "ru" ? "..." : "...") : (lang === "ru" ? "Войти как админ" : "Log in as admin")}
+                  </button>
+                </div>
+                {adminError && <div style={{ fontSize: FONT.xs, color: "#EF4444", marginTop: SPACING.xs }}>{adminError}</div>}
+              </>
+            )}
           </div>
         </div>
       </ScreenWrapper>
