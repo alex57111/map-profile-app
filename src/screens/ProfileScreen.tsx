@@ -48,11 +48,18 @@ export function ProfileScreen() {
     try {
       await auth.becomeAdmin(pwd)
       setIsAdmin(true)
-    } catch {
+    } catch (e) {
       // become_admin() намеренно бросает одну и ту же ошибку и на
       // "Not authenticated", и на неверный пароль (см. schema.sql) —
-      // детали не показываем, только общее сообщение.
-      setAdminError(lang === "ru" ? "Не удалось войти как админ — проверьте пароль" : "Failed to log in as admin — check the password")
+      // в норме детали не показываем, только общее сообщение.
+      //
+      // TEMP DIAG (2026-07-14): временно показываем реальный e.message,
+      // чтобы Alex видел настоящий текст ошибки от RPC без DevTools —
+      // ⚠️ ВРЕМЕННО, откатить на общий текст после диагностики (см.
+      // AGENT_LOG.md). Fallback на прежний общий текст, если message пуст.
+      const fallback = lang === "ru" ? "Не удалось войти как админ — проверьте пароль" : "Failed to log in as admin — check the password"
+      const raw = e instanceof Error ? e.message : String(e)
+      setAdminError(raw && raw.trim() ? `TEMP DIAG: ${raw}` : fallback)
     } finally {
       setAdminLoading(false)
     }
