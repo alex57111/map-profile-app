@@ -292,38 +292,60 @@ grant execute on function public.confirm_event_relevant(uuid) to authenticated;
 
 
 -- ----------------------------------------------------------------------------
--- 5. RPC become_admin
+-- 5. admin_config + RPC become_admin
 -- Дополнение к Блоку 4 (по прямому указанию Alex): режим "админ" для
 -- неограниченного голосования. Пароль сверяется ИСКЛЮЧИТЕЛЬНО здесь, внутри
 -- SECURITY DEFINER функции — на фронтенде (в JS/бандле) пароль нигде не
 -- хранится и не проверяется, только передаётся строкой в RPC-вызов.
 --
--- ВНИМАНИЕ — заведомо слабый пароль '321' (3 цифры, перебирается мгновенно
--- brute-force'ом по RPC). Это осознанный выбор Alex для личного проекта
--- на раннем этапе (см. AGENT_LOG.md, Блок 4 — дополнение). Если проект
--- начнёт расти/выйдет за пределы личного использования — заменить на
--- длинную случайную строку и обязательно добавить rate-limit на вызовы
--- become_admin (сейчас его нет — ничего не мешает перебирать пароль
--- скриптом через анонимный ключ).
---
--- Блок 6 (2026-07-11): по прямому указанию Alex вынос пароля в секрет
--- ПОКА НЕ ДЕЛАЕТСЯ — п.4 ТЗ Блока 6 отложен как есть (см. AGENT_LOG.md,
--- заход 16). Технический долг остаётся открытым.
+-- Блок 6, п.4 (2026-07-13) — вынос пароля из кода:
+-- become_admin — это Postgres RPC, а не Cloudflare Pages Function,
+-- переменные окружения Cloudflare туда физически не долетают (разные
+-- среды выполнения) — "вынос в Cloudflare env var" в буквальном виде не
+-- подходил, см. развилку из AGENT_LOG.md, заход 15/16. Выбран вариант (а)
+-- из уточнения Alex: bcrypt-хэш пароля хранится в отдельной закрытой
+-- таблице admin_config (без RLS-политик на чтение снаружи — доступна
+-- только SECURITY DEFINER функциям, по тому же паттерну, что и
+-- event_votes/vote_rate_log выше). Значение хэша задаёт Alex вручную
+-- одним INSERT/UPDATE в Supabase SQL Editor — см. инструкцию в
+-- AGENT_LOG.md и в отдельном файле миграции. Пароль '321' в открытом виде
+-- в коде/базе больше не хранится нигде.
 -- ----------------------------------------------------------------------------
-create function public.become_admin(p_password text)
+create extension if not exists pgcrypto;
+
+create table public.admin_config (
+  id            integer primary key default 1,
+  password_hash text not null,
+  updated_at    timestamptz not null default now(),
+  constraint admin_config_singleton check (id = 1)
+);
+
+alter table public.admin_config enable row level security;
+-- Политик нет намеренно — таблица закрыта для прямого доступа, читает и
+-- пишет только вручную сам Alex (через Supabase SQL Editor/service role)
+-- и SECURITY DEFINER функция become_admin() ниже.
+
+create or replace function public.become_admin(p_password text)
 returns void
 language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  v_hash text;
 begin
   if auth.uid() is null then
     raise exception 'Not authenticated';
   end if;
 
-  -- Пароль захардкожен только здесь, на сервере. Ошибка намеренно без деталей —
-  -- не подтверждает и не опровергает, что именно было неверно.
-  if p_password is distinct from '321' then
+  select password_hash into v_hash from public.admin_config where id = 1;
+
+  -- v_hash is null → Alex ещё не задал пароль в admin_config (см.
+  -- инструкцию в AGENT_LOG.md) — become_admin недоступен никому, это
+  -- безопасное поведение по умолчанию, а не баг.
+  -- Ошибка намеренно без деталей — не подтверждает и не опровергает, что
+  -- именно было неверно (пароль или отсутствие admin_config).
+  if v_hash is null or p_password is null or crypt(p_password, v_hash) is distinct from v_hash then
     raise exception 'Invalid request';
   end if;
 
