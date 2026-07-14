@@ -7,6 +7,10 @@ export interface AuthAdapter {
   getCurrentUser(): Promise<UserProfile | null>
   signOut(): Promise<void>
   updateProfile(data: Partial<Pick<UserProfile, 'displayName' | 'phone'>>): Promise<UserProfile>
+  // Блок 6, п.4: вход в админ-режим (ProfileScreen) — вызывает RPC
+  // become_admin(p_password). Бросает исключение при неверном пароле или
+  // отсутствии сессии — UI показывает общее сообщение об ошибке.
+  becomeAdmin(password: string): Promise<void>
 }
 
 export interface EventsAdapter {
