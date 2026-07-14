@@ -14,6 +14,16 @@ function makeAnonUser(): UserProfile {
   }
 }
 
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// Мок-пароль для локальной разработки (npm run dev без Supabase) — НЕ
+// секрет и никак не связан с боевым паролём в admin_config (см.
+// supabase/schema.sql). Нужен только чтобы кнопка "Войти как админ" в
+// ProfileScreen была тестируема локально (успех/ошибка) без реальной БД.
+const MOCK_ADMIN_PASSWORD = 'admin'
+
 export const mockAuthAdapter: AuthAdapter = {
   async signInAnonymous(): Promise<UserProfile> {
     const stored = localStorage.getItem(STORAGE_KEY)
@@ -36,5 +46,11 @@ export const mockAuthAdapter: AuthAdapter = {
     const updated: UserProfile = { ...base, ...data }
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updated))
     return updated
+  },
+  async becomeAdmin(password: string): Promise<void> {
+    await delay(150)
+    if (password !== MOCK_ADMIN_PASSWORD) {
+      throw new Error('Invalid request')
+    }
   },
 }
