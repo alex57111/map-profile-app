@@ -39,4 +39,9 @@ export const supabaseAuthAdapter: AuthAdapter = {
     if (error || !data) throw new Error(error?.message ?? "Update failed")
     return toProfile(user.id, data)
   },
+  async becomeAdmin(password: string): Promise<void> {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { error } = await (db as any).rpc("become_admin", { p_password: password })
+    if (error) throw new Error(error.message)
+  },
 }
