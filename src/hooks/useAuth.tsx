@@ -6,6 +6,10 @@ import type { AuthState, UserProfile } from '../types/user'
 type AuthContextValue = AuthState & {
   signIn: () => Promise<void>
   updateProfile: (data: Partial<Pick<UserProfile, 'displayName' | 'phone'>>) => Promise<void>
+  // Блок 6, п.4: вход в админ-режим (ProfileScreen) — проходит через
+  // AuthAdapter, как и signIn/updateProfile, а не напрямую через
+  // supabase-клиент из UI.
+  becomeAdmin: (password: string) => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -57,9 +61,18 @@ export function AuthProvider({ children }: Props) {
       throw e
     }
   }
+  const becomeAdmin = async (password: string) => {
+    try {
+      await auth.becomeAdmin(password)
+    } catch (e) {
+      // Намеренно не логируем сам пароль — только факт ошибки.
+      Sentry.captureException(e, { tags: { op: 'AuthProvider.becomeAdmin' } })
+      throw e
+    }
+  }
 
   return (
-    <AuthContext.Provider value={{ ...state, signIn, updateProfile }}>
+    <AuthContext.Provider value={{ ...state, signIn, updateProfile, becomeAdmin }}>
       {children}
     </AuthContext.Provider>
   )
