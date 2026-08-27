@@ -1,7 +1,7 @@
 # BLOKNOTERROR.md — журнал ошибок (автообновление)
 
 > Обновляется автоматически GitHub Action `.github/workflows/error-log.yml`
-> Последнее обновление: 2026-08-26 03:44 UTC
+> Последнее обновление: 2026-08-27 13:20 UTC
 > Источник: Sentry project "map-profile-app"
 
 ## Открытые (unresolved)
