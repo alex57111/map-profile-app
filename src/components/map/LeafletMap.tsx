@@ -6,7 +6,7 @@ import "leaflet/dist/leaflet.css"
 import type { RoadEvent } from "../../types/event"
 import type { OnlineUser } from "../../types/user"
 import type { GPSPosition, Coords } from "../../types/geo"
-import { EVENT_TYPE_CONFIG } from "../../types/event"
+import { EVENT_TYPE_CONFIG, isCameraStale } from "../../types/event"
 import { useDraggable } from "../../hooks/useDraggable"
 import type { Route } from "../../hooks/useRoute"
 import type { OsmCamera } from "../../hooks/useOsmCameras"
@@ -28,10 +28,17 @@ function arrowSvg(heading: number, color = "#F97316"): L.DivIcon {
   return L.divIcon({ html: svg, className: "", iconSize: [40, 40], iconAnchor: [20, 20] })
 }
 
-function eventIcon(type: RoadEvent["type"]): L.DivIcon {
-  const cfg = EVENT_TYPE_CONFIG[type]
+// Пункт 4 топ-5: событие целиком передаётся вместо type, чтобы можно было
+// проверить isCameraStale() и приглушить/пометить давно не подтверждённую
+// камеру — само по себе на голоса/TTL не влияет, только визуальная подсказка.
+function eventIcon(event: RoadEvent): L.DivIcon {
+  const cfg = EVENT_TYPE_CONFIG[event.type]
+  const stale = isCameraStale(event)
+  const badge = stale
+    ? `<div style="position:absolute;top:-4px;right:-4px;width:16px;height:16px;border-radius:50%;background:#EF4444;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#fff;border:1.5px solid #fff;">?</div>`
+    : ""
   return L.divIcon({
-    html: `<div style="width:36px;height:36px;border-radius:50%;background:${cfg.color};display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 6px rgba(0,0,0,0.4);border:2px solid rgba(255,255,255,0.8);">${cfg.icon}</div>`,
+    html: `<div style="position:relative;width:36px;height:36px;border-radius:50%;background:${cfg.color};display:flex;align-items:center;justify-content:center;font-size:18px;box-shadow:0 2px 6px rgba(0,0,0,0.4);border:2px solid rgba(255,255,255,0.8);opacity:${stale ? 0.55 : 1};">${cfg.icon}${badge}</div>`,
     className: "", iconSize: [36, 36], iconAnchor: [18, 18],
   })
 }
@@ -250,7 +257,7 @@ export function LeafletMap({
     }
     for (const ev of events) {
       if (eventMarkersRef.current.has(ev.id)) continue
-      const marker = L.marker([ev.lat, ev.lng], { icon: eventIcon(ev.type) })
+      const marker = L.marker([ev.lat, ev.lng], { icon: eventIcon(ev) })
       marker.on("click", (e) => { L.DomEvent.stopPropagation(e); onEventClickRef.current(ev) })
       if (cluster) cluster.addLayer(marker); else marker.addTo(map)
       eventMarkersRef.current.set(ev.id, marker)

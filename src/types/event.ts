@@ -61,4 +61,18 @@ export interface CreateEventPayload {
   zoneLimitKmh?: number
 }
 
+// Пункт 4 топ-5 (протухание камер): камера (ttlMins: null) никогда не
+// истекает по времени, только по streak-голосам "нет". Если её долго никто
+// не подтверждал — считаем "нуждающейся в подтверждении" (не удаляем,
+// не скрываем, только подсказка в UI). Порог согласован с Alex — 60 дней.
+export const CAMERA_STALE_DAYS = 60
+
+export function isCameraStale(event: RoadEvent): boolean {
+  if (event.type !== "camera") return false
+  const refIso = event.updatedAt ?? event.createdAt
+  if (!refIso) return false
+  const ageMs = Date.now() - new Date(refIso).getTime()
+  return ageMs > CAMERA_STALE_DAYS * 24 * 60 * 60 * 1000
+}
+
 export type VoteValue = "yes" | "no"

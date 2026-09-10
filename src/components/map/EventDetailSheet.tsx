@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { COLORS, FONT, SPACING, RADIUS } from '../ui/tokens'
-import { EVENT_TYPE_CONFIG } from '../../types/event'
+import { EVENT_TYPE_CONFIG, isCameraStale, CAMERA_STALE_DAYS } from '../../types/event'
 import type { RoadEvent } from '../../types/event'
 
 interface Props {
@@ -43,6 +43,7 @@ export function EventDetailSheet({ event, onVote, onConfirmRelevant, onClose }: 
   if (!event) return null
   const cfg = EVENT_TYPE_CONFIG[event.type]
   const score = event.positiveVotes - event.negativeVotes
+  const stale = isCameraStale(event)
   // Блок 6: expiresAt === null → событие не истекает (camera).
   const expiresIn = event.expiresAt === null
     ? null
@@ -84,6 +85,16 @@ export function EventDetailSheet({ event, onVote, onConfirmRelevant, onClose }: 
           </div>
         </div>
 
+        {stale && (
+          <div style={{
+            backgroundColor: COLORS.error + '18', border: `1px solid ${COLORS.error}`,
+            borderRadius: RADIUS.md, padding: SPACING.sm, marginBottom: SPACING.sm,
+            fontSize: FONT.sm, color: COLORS.textPrimary,
+          }}>
+            🔔 Эту камеру никто не подтверждал больше {CAMERA_STALE_DAYS} дней. Она всё ещё здесь?
+          </div>
+        )}
+
         <div style={{
           backgroundColor: COLORS.bgElevated, borderRadius: RADIUS.md, padding: SPACING.sm, marginBottom: SPACING.md,
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -113,8 +124,9 @@ export function EventDetailSheet({ event, onVote, onConfirmRelevant, onClose }: 
 
         <button onClick={() => void handleConfirmRelevant()} disabled={confirmed} style={{
           width: '100%', padding: '12px', marginBottom: SPACING.sm,
-          backgroundColor: confirmed ? COLORS.bgElevated : COLORS.bgElevated,
-          border: `1px solid ${COLORS.border}`, borderRadius: RADIUS.md,
+          backgroundColor: confirmed ? COLORS.bgElevated : (stale ? COLORS.error + '18' : COLORS.bgElevated),
+          border: `1px solid ${confirmed ? COLORS.border : (stale ? COLORS.error : COLORS.border)}`,
+          borderRadius: RADIUS.md,
           color: confirmed ? COLORS.textDisabled : COLORS.textPrimary,
           fontSize: FONT.sm, fontWeight: 600, cursor: confirmed ? 'default' : 'pointer',
         }}>{confirmed ? '✅ Подтверждено' : '🔄 Ещё актуально'}</button>
