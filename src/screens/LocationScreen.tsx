@@ -18,6 +18,7 @@ import { useEventsAhead } from "../hooks/useEventsAhead"
 import { useSpeedLimit } from "../hooks/useSpeedLimit"
 import { useRoute, type Route } from "../hooks/useRoute"
 import { useAverageSpeedZone } from "../hooks/useAverageSpeedZone"
+import { useWakeLock } from "../hooks/useWakeLock"
 import { useOsmCameras } from "../hooks/useOsmCameras"
 import { useOsmSpeedZones } from "../hooks/useOsmSpeedZones"
 import type { RoadEvent, EventType } from "../types/event"
@@ -61,6 +62,8 @@ export function LocationScreen({ authStatus }: LocationScreenProps) {
   } = useRoute()
 
   useAverageSpeedZone(gps.position, combinedEvents)
+  // Шаг 1 (антирадар): не гасить экран, пока есть построенный маршрут.
+  useWakeLock(activeRoute !== null)
 
   const [autoCenter, setAutoCenter] = useState(true)
   const [pendingCoords, setPendingCoords] = useState<Coords | null>(null)
