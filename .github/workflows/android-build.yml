@@ -1,5 +1,8 @@
 name: Android APK build (debug)
 
+permissions:
+  contents: write
+
 # Блок A (Capacitor, Шаг 1): собирает debug APK нативной оболочки, чтобы
 # тестировать реальный фон (background geolocation, Блок B) на телефоне
 # без Android Studio на локальной машине. Debug APK не подписан релизным
