@@ -595,6 +595,38 @@ TEMP DIAG, удалить вместе с импортом в LocationScreen.tsx
 (сюда после каждого блока дописывать: что сделано, какие файлы менялись,
 какие решения принял агент и почему, какие проблемы возникли)
 
+### 2026-09-10 (заход 22) — Capacitor Блок A: каркас нативной оболочки + CI-сборка APK
+- Контекст: продолжение Шага 1 (фон). Уточнено с Alex — сборочных
+  инструментов (Android Studio/Xcode) локально нет, тестируем только по
+  ссылке. Решение: сборка через GitHub Actions (не требует ничего на
+  стороне Alex), Android — сначала, iOS отложен (требует Mac + Apple
+  Developer аккаунт для установки на реальный iPhone — отдельный разговор).
+- Установлено: `@capacitor/core`, `@capacitor/android`,
+  `@capacitor/cli` (dev). Веб-сборка на Cloudflare Pages не затронута —
+  Capacitor использует тот же `dist/` (`webDir: 'dist'` в
+  `capacitor.config.ts`), это отдельный, независимый output.
+- `npx cap init` → `capacitor.config.ts` (appId `com.poputchik.app`,
+  appName "Попутчик"). `npx cap add android` → сгенерирован `android/`
+  (нативный Gradle-проект), сборочные артефакты (`build/`,
+  `local.properties`, скопированные web-assets) уже в `android/.gitignore`
+  из коробки — в репозиторий не попадают.
+- Новый `.github/workflows/android-build.yml`: на пуш в main (если менялись
+  `android/**`, `src/**`, package.json, capacitor.config.ts) или вручную
+  (`workflow_dispatch`) — `npm ci` → `npm run build` → `npx cap sync
+  android` → `./gradlew assembleDebug` → APK публикуется (а) как build
+  artifact на 30 дней и (б) как asset в GitHub Release с фиксированным
+  тегом `android-debug-latest` (тег переиспользуется — ссылка на скачивание
+  не меняется между сборками). Debug APK не подписан релизным ключом —
+  ставится sideload'ом ("неизвестные источники").
+- Дальше (Блок B, следующий заход): плагин background-geolocation +
+  local-notifications, чтобы события действительно алертили при свёрнутом
+  приложении/выключенном экране — то, ради чего Capacitor и затевался.
+  Пока каркас без этой функциональности — обычная обёртка над тем же
+  веб-приложением, фон ещё не работает.
+- npm run build + npx tsc --noEmit (веб-часть, без правок в src/) — оба
+  чисто. Gradle-сборку в песочнице не проверял (нет Android SDK/сети до
+  dl.google.com) — первая реальная проверка будет через сам CI после пуша.
+
 ### 2026-09-10 (заход 21) — Шаг 1 (антирадар): Wake Lock, чтобы экран не гас в навигации
 - Контекст: Alex попросил начать с "фоновой работы". Уточнено и зафиксировано
   в HANDOFF: полноценный фон (свёрнутое приложение/выключенный экран с
